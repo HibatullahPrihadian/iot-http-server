@@ -1,0 +1,27 @@
+# node_modules & build output
+node_modules/
+dist/
+build/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Data persisten (jangan commit: DB, InfluxDB, Node-RED, uploads)
+data/
+influxdb-data/
+nodered-data/
+hidro-data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+
+# Log
+*.log
+
+# OS junk
+.DS_Store
+._*

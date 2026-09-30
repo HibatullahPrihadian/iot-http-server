@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+.env.*
+note.txt
+node_modules
+dist
+build
+data
+influxdb-data
+nodered-data
+hidro-data
+*.log
+*.db
+.DS_Store
+._*

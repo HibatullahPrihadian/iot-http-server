@@ -1,0 +1,20 @@
+# Override produksi: named Cloudflare Tunnel untuk seluruh app.
+#
+# Pemakaian:
+#   1. Isi TUNNEL_TOKEN di .env (token tunnel yang sudah ada, sama seperti
+#      yang dipakai service systemd cloudflared, ATAU tunnel baru khusus iot).
+#   2. Di dashboard Cloudflare Zero Trust, tambahkan Public Hostname:
+#        iot.phd.my.id  ->  http://web:80
+#   3. Jalankan:
+#        docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d
+#
+# Dengan cara ini hostname stabil (bukan *.trycloudflare.com acak), sehingga
+# SERVER_BASE di firmware ESP32 bisa memakai https://iot.phd.my.id.
+services:
+  cloudflared-web:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    environment:
+      - TUNNEL_PROTOCOL=http2
+    # Tanpa shell (image distroless): entrypoint cloudflared dipanggil langsung.
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN:?TUNNEL_TOKEN wajib diisi di .env}

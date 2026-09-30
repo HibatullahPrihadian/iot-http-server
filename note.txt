@@ -1,0 +1,6 @@
+// Catatan token — JANGAN isi nilai rahasia di berkas ini (berkas ini ikut ter-commit).
+// Simpan token sebenarnya di .env (tidak di-commit).
+//
+// Token InfluxDB (untuk iot-api): set INFLUXDB_TOKEN di .env.
+// Token perangkat (ESP32):        set DEVICE_TOKEN di .env, harus sama dengan firmware.
+// Token lain (mis. ChirpStack/axios lama): simpan di .env bila masih dipakai.

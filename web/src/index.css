@@ -1,0 +1,223 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: #f2f2f7;
+  background-color: #121212;
+  background-image:
+    radial-gradient(circle at 10% 20%, rgba(10, 132, 255, 0.15) 0%, transparent 40%),
+    radial-gradient(circle at 90% 80%, rgba(48, 209, 88, 0.12) 0%, transparent 40%),
+    radial-gradient(circle at 50% 50%, rgba(191, 90, 242, 0.1) 0%, transparent 50%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  background-size: cover;
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer components {
+  .glass-panel {
+    background: rgba(28, 28, 30, 0.65);
+    -webkit-backdrop-filter: blur(24px);
+    backdrop-filter: blur(24px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 24px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    transition: all 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .card-sub {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 18px;
+    transition: all 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .card-sub:hover {
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .btn-ios {
+    border-radius: 12px;
+    font-weight: 600;
+    transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .btn-ios:active {
+    transform: scale(0.96);
+    filter: brightness(0.9);
+  }
+
+  /* Input/select iOS (port dari index.html .card-panel input). */
+  .input-ios {
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #fff;
+    border-radius: 10px;
+    padding: 10px;
+    font-family: inherit;
+    font-size: 15px;
+    transition: 0.3s;
+  }
+
+  .input-ios:focus {
+    outline: none;
+    border-color: #0a84ff;
+    background: rgba(0, 0, 0, 0.4);
+    box-shadow: 0 0 10px rgba(10, 132, 255, 0.3);
+  }
+
+  .input-ios::placeholder {
+    color: #8e8e93;
+  }
+}
+
+@layer utilities {
+  /* Glow hover kartu sensor (port dari index.html .card-*). */
+  .glow-suhu:hover {
+    transform: translateY(-3px) scale(1.02);
+    box-shadow: 0 12px 30px rgba(255, 69, 58, 0.25);
+    border-color: rgba(255, 69, 58, 0.4);
+  }
+
+  .glow-lembab:hover {
+    transform: translateY(-3px) scale(1.02);
+    box-shadow: 0 12px 30px rgba(100, 210, 255, 0.25);
+    border-color: rgba(100, 210, 255, 0.4);
+  }
+
+  .glow-tds:hover {
+    transform: translateY(-3px) scale(1.02);
+    box-shadow: 0 12px 30px rgba(48, 209, 88, 0.25);
+    border-color: rgba(48, 209, 88, 0.4);
+  }
+
+  .glow-ph:hover {
+    transform: translateY(-3px) scale(1.02);
+    box-shadow: 0 12px 30px rgba(255, 159, 10, 0.25);
+    border-color: rgba(255, 159, 10, 0.4);
+  }
+
+  .glow-uv:hover {
+    transform: translateY(-3px) scale(1.02);
+    box-shadow: 0 12px 30px rgba(191, 90, 242, 0.25);
+    border-color: rgba(191, 90, 242, 0.4);
+  }
+
+  .glow-air:hover {
+    transform: translateY(-3px) scale(1.02);
+    box-shadow: 0 12px 30px rgba(255, 55, 95, 0.25);
+    border-color: rgba(255, 55, 95, 0.4);
+  }
+
+  /* Glow hover kartu chart (port dari index.html .chart-glow-*). */
+  .chart-glow-suhu:hover {
+    box-shadow: 0 15px 40px rgba(255, 69, 58, 0.15);
+    border-color: rgba(255, 69, 58, 0.3);
+  }
+
+  .chart-glow-lembab:hover {
+    box-shadow: 0 15px 40px rgba(100, 210, 255, 0.15);
+    border-color: rgba(100, 210, 255, 0.3);
+  }
+
+  .chart-glow-tds:hover {
+    box-shadow: 0 15px 40px rgba(48, 209, 88, 0.15);
+    border-color: rgba(48, 209, 88, 0.3);
+  }
+
+  .chart-glow-ph:hover {
+    box-shadow: 0 15px 40px rgba(255, 159, 10, 0.15);
+    border-color: rgba(255, 159, 10, 0.3);
+  }
+
+  .chart-glow-uv:hover {
+    box-shadow: 0 15px 40px rgba(191, 90, 242, 0.15);
+    border-color: rgba(191, 90, 242, 0.3);
+  }
+
+  .chart-glow-air:hover {
+    box-shadow: 0 15px 40px rgba(255, 55, 95, 0.15);
+    border-color: rgba(255, 55, 95, 0.3);
+  }
+
+  /* Alert mode (port dari index.html). */
+  .alert-danger {
+    border-color: rgba(255, 69, 58, 0.6) !important;
+    background: rgba(255, 69, 58, 0.1) !important;
+    box-shadow: 0 0 25px rgba(255, 69, 58, 0.2) !important;
+  }
+
+  .alert-text-danger {
+    color: #ff453a !important;
+    text-shadow: 0 0 10px rgba(255, 69, 58, 0.5) !important;
+  }
+
+  .alert-warning {
+    border-color: rgba(255, 159, 10, 0.6) !important;
+    background: rgba(255, 159, 10, 0.1) !important;
+    box-shadow: 0 0 25px rgba(255, 159, 10, 0.2) !important;
+  }
+
+  .alert-text-warning {
+    color: #ff9f0a !important;
+    text-shadow: 0 0 10px rgba(255, 159, 10, 0.5) !important;
+  }
+
+  .text-glow-white {
+    text-shadow: 0 0 12px rgba(255, 255, 255, 0.3);
+  }
+
+  .skeleton {
+    animation: skeletonPulseDark 1.5s infinite ease-in-out;
+    color: transparent !important;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    display: inline-block;
+    min-width: 80px;
+    height: 32px;
+    margin-top: 4px;
+  }
+}
+
+@keyframes skeletonPulseDark {
+  0% { opacity: 0.4; }
+  50% { opacity: 0.8; box-shadow: 0 0 10px rgba(255, 255, 255, 0.1); }
+  100% { opacity: 0.4; }
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass-panel {
+    background: rgba(28, 28, 30, 0.92);
+  }
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}

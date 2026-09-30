@@ -1,0 +1,85 @@
+services:
+  nodered:
+    image: nodered/node-red:latest
+    restart: unless-stopped
+    ports:
+      - "1880:1880"
+    volumes:
+      - ./nodered-data:/data
+    environment:
+      - TZ=Asia/Jakarta
+      - DEVICE_TOKEN=${DEVICE_TOKEN:?DEVICE_TOKEN wajib diisi di .env}
+
+  influxdb:
+    image: influxdb:2.7-alpine
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    volumes:
+      - ./influxdb-data:/var/lib/influxdb2
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUXDB_USERNAME:-admin}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_PASSWORD:?INFLUXDB_PASSWORD wajib diisi di .env}
+      - DOCKER_INFLUXDB_INIT_ORG=${INFLUXDB_ORG:-hidroponik}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET:-sensor_data}
+
+  # API IoT (ex nodejs-web): endpoint sensor + antrean perintah HTTP. Internal saja.
+  iot-api:
+    build: ./iot-api
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Jakarta
+      - DEVICE_TOKEN=${DEVICE_TOKEN:?DEVICE_TOKEN wajib diisi di .env}
+      - INFLUXDB_URL=${INFLUXDB_URL:-http://influxdb:8086}
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:?INFLUXDB_TOKEN wajib diisi di .env}
+
+  # Backend Plan (SQLite + uploads). Internal saja, diakses lewat nginx /api/.
+  hidro-backend:
+    build: ./hidro-backend
+    container_name: hidroponik-backend
+    restart: unless-stopped
+    environment:
+      PORT: 5000
+      DB_PATH: /app/data/hidroponik.db
+      UPLOAD_DIR: /app/data/uploads
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
+      TZ: Asia/Jakarta
+      IOT_API_URL: ${IOT_API_URL:-https://hidroponik.phd.my.id/api/sensor-data?filter=realtime}
+      IOT_API_KEY: ${IOT_API_KEY:-}
+      IOT_TIMEOUT_MS: ${IOT_TIMEOUT_MS:-5000}
+    volumes:
+      - ./hidro-data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:5000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Satu frontend React (monitoring IoT + plan tanam), disajikan nginx.
+  web:
+    build: ./web
+    container_name: hidroponik-web
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-5005}:80"
+    depends_on:
+      iot-api:
+        condition: service_started
+      hidro-backend:
+        condition: service_healthy
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --url http://nodered:1880
+
+  # Quick tunnel ke seluruh app (hostname acak *.trycloudflare.com, berubah tiap restart).
+  # Untuk produksi ESP32, gunakan named tunnel: lihat docker-compose.tunnel.yml.
+  cloudflared-web:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    environment:
+      - TUNNEL_PROTOCOL=http2
+    command: tunnel --url http://web:80
