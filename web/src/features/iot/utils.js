@@ -61,7 +61,7 @@ export const SENSORS = {
     chartGlow: 'chart-glow-uv',
     decimals: 0,
     yMin: 0,
-    yMax: 40,
+    yMax: 150,
   },
   suhu_air: {
     key: 'suhu_air',
