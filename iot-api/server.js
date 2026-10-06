@@ -71,48 +71,51 @@ app.get('/api/sensor-data', async (req, res) => {
     const filter = req.query.filter || 'realtime';
     
     let rangeQuery = '-6h';
-    let tailQuery = '|> tail(n:40)'; 
-    let aggregateQuery = ''; // <-- Variabel baru untuk menampung query agregasi
+    let aggregateQuery = ''; // Menampung query agregasi/downsampling
+    // Batasi 40 titik TERAKHIR per _field. Harus SEBELUM pivot: sesudah pivot
+    // _field sudah lebur jadi kolom, jadi tail/limit tak bisa grup per field
+    // (itu penyebab bug realtime kosong sebelumnya).
+    // Urutan akhir dikembalikan ASC (naik) agar konsisten dengan kontrak lama:
+    // UI mengambil titik terbaru di data[data.length-1].
+    let tailPerFieldQuery = `
+        |> sort(columns: ["_time"], desc: true)
+        |> group(columns: ["_field"])
+        |> limit(n: 40)
+        |> group()
+        |> sort(columns: ["_time"], desc: false)`;
 
-    // Konfigurasi dinamis rentang waktu dan downsampling
+    // Konfigurasi dinamis rentang waktu dan downsampling.
     if (filter === '12hour') { 
         rangeQuery = '-12h';
-        tailQuery = ''; 
         aggregateQuery = '|> aggregateWindow(every: 5m, fn: mean, createEmpty: false)';
     } else if (filter === '1day') {
         rangeQuery = '-24h';
-        tailQuery = ''; 
         aggregateQuery = '|> aggregateWindow(every: 15m, fn: mean, createEmpty: false)';
     } else if (filter === '1week') {
         rangeQuery = '-7d';
-        tailQuery = ''; 
         aggregateQuery = '|> aggregateWindow(every: 1h, fn: mean, createEmpty: false)';
     } else if (filter === '2week') {
         rangeQuery = '-14d';
-        tailQuery = '';
         aggregateQuery = '|> aggregateWindow(every: 2h, fn: mean, createEmpty: false)';
     } else if (filter === '1month') {
         rangeQuery = '-30d';
-        tailQuery = '';
         aggregateQuery = '|> aggregateWindow(every: 6h, fn: mean, createEmpty: false)';
     } else if (filter === '3month') {
         rangeQuery = '-90d';
-        tailQuery = '';
         aggregateQuery = '|> aggregateWindow(every: 12h, fn: mean, createEmpty: false)';
     } else if (filter === '6month') {
         rangeQuery = '-180d';
-        tailQuery = '';
         aggregateQuery = '|> aggregateWindow(every: 24h, fn: mean, createEmpty: false)';
     }
 
-    // Mengambil data terbaru dengan Agregasi (jika ada) sebelum melakukan pivot
+    // Agregasi (jika ada) dijalankan sebelum pivot.
     const fluxQuery = `
       from(bucket: "${bucket}")
         |> range(start: ${rangeQuery})
         |> filter(fn: (r) => r["_measurement"] == "hidroponik_sensor")
         ${aggregateQuery}
+        ${tailPerFieldQuery}
         |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
-        ${tailQuery}
     `;
     
     let dataSensor = [];

@@ -119,6 +119,8 @@ Perintah di-**enqueue** (bukan lagi MQTT publish). Pompa utama kini dikendalikan
 ```
 > Tanpa wrapper `object`/`objectJSON`, fungsi Node-RED mengembalikan `null` dan data diabaikan.
 
+> **URL InfluxDB di Node-RED wajib `http://influxdb:8086`** (nama service compose), BUKAN IP host/LAN lama. Bila server pindah jaringan dan flow masih menunjuk IP lama, write ke InfluxDB akan `RequestTimedOutError` → data terbaru tidak pernah tersimpan meski ESP32 melaporkan "terkirim". Cek node config InfluxDB di `nodered-data/flows.json`.
+
 ### 8. Poll Perintah (perangkat)
 `GET /api/device/commands` — header `X-Device-Token`:
 ```json
