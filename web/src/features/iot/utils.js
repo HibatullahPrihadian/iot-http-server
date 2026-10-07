@@ -37,7 +37,10 @@ export const SENSORS = {
     chartGlow: 'chart-glow-tds',
     decimals: 0,
     yMin: 0,
+    // Fallback darurat: hanya dipakai bila tak ada resep & tak ada data.
     yMax: 1800,
+    autoScale: true,
+    floorFromRecipe: true,
   },
   kadar_ph: {
     key: 'kadar_ph',
@@ -133,15 +136,26 @@ export function niceCeil(value) {
 }
 
 // Batas atas sumbu Y. Fixed (meta.yMax) kecuali autoScale aktif: ikuti peak data,
-// tidak pernah di bawah floor. Non-numerik/null diabaikan.
-export function computeYMax(values, meta) {
+// dengan floor prioritas: recipeTarget > yMaxFloor > peak data. Tanpa resep & tanpa
+// floor tetap: murni ikuti peak. Tanpa data sama sekali: jatuh ke floor/meta.yMax.
+// Non-numerik/null diabaikan.
+export function computeYMax(values, meta, recipeTarget) {
   if (!meta.autoScale) return meta.yMax
-  const floor = meta.yMaxFloor ?? meta.yMax
   const nums = (values ?? []).filter(
     (v) => v !== null && v !== undefined && Number.isFinite(Number(v))
   )
-  if (nums.length === 0) return floor
-  const peak = nums.reduce((m, v) => Math.max(m, Number(v)), -Infinity)
+  const peak = nums.length
+    ? nums.reduce((m, v) => Math.max(m, Number(v)), -Infinity)
+    : null
+  let floor
+  if (meta.floorFromRecipe && recipeTarget !== null && recipeTarget !== undefined) {
+    floor = Number(recipeTarget)
+    if (!Number.isFinite(floor)) floor = undefined
+  } else if (meta.yMaxFloor !== undefined) {
+    floor = meta.yMaxFloor
+  }
+  if (floor === undefined) floor = peak === null ? meta.yMax : niceCeil(peak)
+  if (peak === null) return floor
   return Math.max(floor, niceCeil(peak))
 }
 

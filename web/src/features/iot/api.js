@@ -32,6 +32,9 @@ export const getSensorData = (filter = 'realtime') =>
 
 export const getRelayStatus = () => request('/relay/status')
 
+// Resep tangki aktif + sensor terakhir: { recipe, sensor, sensorError }.
+export const getTankRecipe = () => request('/tank')
+
 export const kontrolPompa = (durasi) =>
   post('/pompa/kontrol', { durasi })
 

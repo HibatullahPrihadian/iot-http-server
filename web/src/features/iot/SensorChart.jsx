@@ -13,6 +13,7 @@ import {
 import annotationPlugin from 'chartjs-plugin-annotation'
 import { Line } from 'react-chartjs-2'
 import { SENSORS, annotationsFor, makeGradient, computeYMax } from './utils.js'
+import { useTankTarget } from './useTankTarget.js'
 
 ChartJS.register(
   LineController,
@@ -35,7 +36,13 @@ ChartJS.defaults.font.size = 12
 export default function SensorChart({ sensorKey, labels, values, height = 230 }) {
   const meta = SENSORS[sensorKey]
 
-  const yMax = useMemo(() => computeYMax(values, meta), [values, meta])
+  // Hanya TDS memakai floor dari target ppm resep tangki; sensor lain undefined.
+  const tankTarget = useTankTarget({ enabled: sensorKey === 'kadar_tds' })
+
+  const yMax = useMemo(
+    () => computeYMax(values, meta, sensorKey === 'kadar_tds' ? tankTarget : undefined),
+    [values, meta, sensorKey, tankTarget]
+  )
 
   const data = useMemo(
     () => ({
