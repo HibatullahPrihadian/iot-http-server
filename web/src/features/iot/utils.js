@@ -62,6 +62,8 @@ export const SENSORS = {
     decimals: 0,
     yMin: 0,
     yMax: 150,
+    autoScale: true,
+    yMaxFloor: 50,
   },
   suhu_air: {
     key: 'suhu_air',
@@ -119,6 +121,28 @@ export function trendFilterToApi(value) {
 export function bulatkan(nilai, jumlahDesimal) {
   if (nilai === null || nilai === undefined) return null
   return Number(Number(nilai).toFixed(jumlahDesimal))
+}
+
+// Bulatkan ke atas ke kelipatan "bulat" terdekat agar label tick rapi.
+const NICE_STEPS = [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]
+export function niceCeil(value) {
+  for (const step of NICE_STEPS) {
+    if (value <= step) return step
+  }
+  return Math.ceil(value / 1000) * 1000
+}
+
+// Batas atas sumbu Y. Fixed (meta.yMax) kecuali autoScale aktif: ikuti peak data,
+// tidak pernah di bawah floor. Non-numerik/null diabaikan.
+export function computeYMax(values, meta) {
+  if (!meta.autoScale) return meta.yMax
+  const floor = meta.yMaxFloor ?? meta.yMax
+  const nums = (values ?? []).filter(
+    (v) => v !== null && v !== undefined && Number.isFinite(Number(v))
+  )
+  if (nums.length === 0) return floor
+  const peak = nums.reduce((m, v) => Math.max(m, Number(v)), -Infinity)
+  return Math.max(floor, niceCeil(peak))
 }
 
 // Ambil nilai sensor dari row, dukung alias lama (tds/ph/uv/suhu).

@@ -12,7 +12,7 @@ import {
 } from 'chart.js'
 import annotationPlugin from 'chartjs-plugin-annotation'
 import { Line } from 'react-chartjs-2'
-import { SENSORS, annotationsFor, makeGradient } from './utils.js'
+import { SENSORS, annotationsFor, makeGradient, computeYMax } from './utils.js'
 
 ChartJS.register(
   LineController,
@@ -34,6 +34,8 @@ ChartJS.defaults.font.size = 12
 // 6 chart line dengan gradient/annotation ala index.html createChart (baris 459-498).
 export default function SensorChart({ sensorKey, labels, values, height = 230 }) {
   const meta = SENSORS[sensorKey]
+
+  const yMax = useMemo(() => computeYMax(values, meta), [values, meta])
 
   const data = useMemo(
     () => ({
@@ -74,13 +76,13 @@ export default function SensorChart({ sensorKey, labels, values, height = 230 })
         y: {
           grid: { color: 'rgba(255, 255, 255, 0.04)', drawBorder: false },
           min: meta.yMin,
-          max: meta.yMax,
+          max: yMax,
           beginAtZero: true,
         },
       },
       interaction: { mode: 'index', intersect: false },
     }),
-    [sensorKey, meta.yMin, meta.yMax]
+    [sensorKey, meta.yMin, yMax]
   )
 
   return (

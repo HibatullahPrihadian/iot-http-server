@@ -170,6 +170,6 @@ Dashboard IoT diport ke `web/src/features/iot/`:
 
 Threshold alert, bound chart, dan garis annotation dipertahankan **persis** dari `index.html` lama:
 - Alert: suhu air `>=30`/`>28`; suhu udara `>=35`/`>32`; TDS `<=500 || >=1500`/`<700 || >1300`; kelembapan `<=40 || >=80`; pH `<5.5 || >6.5`; UV `<0 || >2000`.
-- Bound chart: suhu_udara 0-50, kelembapan 0-100, TDS 0-1800, pH 0-14, UV 0-150, suhu_air 0-50.
+- Bound chart: suhu_udara 0-50, kelembapan 0-100, TDS 0-1800, pH 0-14, UV auto (floor 50), suhu_air 0-50.
 - Annotation: TDS 700/1300, pH 5.5/6.5, suhu_air 30, suhu_udara 34.
 
