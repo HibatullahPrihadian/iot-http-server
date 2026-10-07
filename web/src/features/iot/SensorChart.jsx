@@ -36,12 +36,14 @@ ChartJS.defaults.font.size = 12
 export default function SensorChart({ sensorKey, labels, values, height = 230 }) {
   const meta = SENSORS[sensorKey]
 
-  // Hanya TDS memakai floor dari target ppm resep tangki; sensor lain undefined.
-  const tankTarget = useTankTarget({ enabled: sensorKey === 'kadar_tds' })
+  // TDS memakai ppmTarget (floor + garis); pH memakai phMin/phMax (garis).
+  const tankRecipe = useTankTarget({
+    enabled: sensorKey === 'kadar_tds' || sensorKey === 'kadar_ph',
+  })
 
   const yMax = useMemo(
-    () => computeYMax(values, meta, sensorKey === 'kadar_tds' ? tankTarget : undefined),
-    [values, meta, sensorKey, tankTarget]
+    () => computeYMax(values, meta, sensorKey === 'kadar_tds' ? tankRecipe?.ppmTarget : undefined),
+    [values, meta, sensorKey, tankRecipe]
   )
 
   const data = useMemo(
@@ -67,10 +69,11 @@ export default function SensorChart({ sensorKey, labels, values, height = 230 })
     [labels, values, meta.color]
   )
 
-  const annotations = useMemo(
-    () => annotationsFor(sensorKey, sensorKey === 'kadar_tds' ? tankTarget : undefined),
-    [sensorKey, tankTarget]
-  )
+  const annotations = useMemo(() => {
+    if (sensorKey === 'kadar_tds') return annotationsFor(sensorKey, tankRecipe?.ppmTarget)
+    if (sensorKey === 'kadar_ph') return annotationsFor(sensorKey, tankRecipe)
+    return annotationsFor(sensorKey)
+  }, [sensorKey, tankRecipe])
 
   const options = useMemo(
     () => ({

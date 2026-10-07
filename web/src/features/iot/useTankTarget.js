@@ -5,31 +5,53 @@ const TTL_MS = 10000
 
 export const TANK_RECIPE_CHANGED_EVENT = 'tank-recipe-changed'
 
-// Cache bersama antar chart: 6 chart me-mount bersamaan = 1 request.
-let cached = { value: null, fetchedAt: 0 }
+// Cache bersama antar chart: TDS + pH me-mount bersamaan = 1 request.
+let cached = { recipe: { ppmTarget: null, phMin: null, phMax: null }, fetchedAt: 0 }
 let inflight = null
 
-function validTarget(v) {
+function validPpm(v) {
   if (v === null || v === undefined) return null
   const n = Number(v)
   return Number.isFinite(n) && n >= 0 ? n : null
 }
 
+function validPh(v) {
+  if (v === null || v === undefined) return null
+  const n = Number(v)
+  return Number.isFinite(n) && n >= 0 && n <= 14 ? n : null
+}
+
+function pickRecipe(source) {
+  const ppmTarget = validPpm(source?.ppmTarget)
+  const phMin = validPh(source?.phMin)
+  const phMax = validPh(source?.phMax)
+  return {
+    ppmTarget,
+    phMin: phMin !== null && phMax !== null && phMin <= phMax ? phMin : null,
+    phMax: phMin !== null && phMax !== null && phMin <= phMax ? phMax : null,
+  }
+}
+
 // Beri tahu chart bahwa resep tangki aktif berubah (dipanggil setelah PUT sukses).
-// Nilai valid langsung dipakai; null/invalid menandai cache basi agar refetch.
-export function notifyTankRecipeChanged(ppmTarget) {
-  const value = validTarget(ppmTarget)
-  if (value !== null) cached = { value, fetchedAt: Date.now() }
-  else cached = { value: cached.value, fetchedAt: 0 }
+// Terima objek resep { ppmTarget, phMin, phMax } atau angka ppmTarget (kompatibel lama).
+export function notifyTankRecipeChanged(recipeOrTarget) {
+  const recipe =
+    recipeOrTarget !== null &&
+    typeof recipeOrTarget === 'object' &&
+    !Array.isArray(recipeOrTarget)
+      ? pickRecipe(recipeOrTarget)
+      : { ...cached.recipe, ppmTarget: validPpm(recipeOrTarget) }
+  cached = { recipe, fetchedAt: Date.now() }
   window.dispatchEvent(
-    new CustomEvent(TANK_RECIPE_CHANGED_EVENT, { detail: { ppmTarget: value } })
+    new CustomEvent(TANK_RECIPE_CHANGED_EVENT, { detail: { recipe } })
   )
 }
 
-// Target ppm resep tangki aktif (floor sumbu Y chart TDS).
-// enabled=false -> tidak fetch, langsung null. Gagal fetch -> diam, pakai nilai terakhir.
+// Resep tangki aktif { ppmTarget, phMin, phMax } (field null bila tak ada).
+// Dipakai chart TDS (floor + garis target) dan pH (garis batas).
+// enabled=false -> tidak fetch, langsung nilai cache. Gagal fetch -> diam, pakai terakhir.
 export function useTankTarget({ enabled = true } = {}) {
-  const [target, setTarget] = useState(cached.value)
+  const [recipe, setRecipe] = useState(cached.recipe)
 
   useEffect(() => {
     if (!enabled) return undefined
@@ -37,7 +59,7 @@ export function useTankTarget({ enabled = true } = {}) {
 
     async function load(force = false) {
       if (!force && Date.now() - cached.fetchedAt < TTL_MS) {
-        if (!cancelled) setTarget(cached.value)
+        if (!cancelled) setRecipe(cached.recipe)
         return
       }
       try {
@@ -47,11 +69,11 @@ export function useTankTarget({ enabled = true } = {}) {
           })
         }
         const res = await inflight
-        const value = validTarget(res?.recipe?.ppmTarget)
-        cached = { value, fetchedAt: Date.now() }
-        if (!cancelled) setTarget(value)
+        const next = pickRecipe(res?.recipe)
+        cached = { recipe: next, fetchedAt: Date.now() }
+        if (!cancelled) setRecipe(next)
       } catch {
-        // Diamkan; chart tetap jalan mode data-only.
+        // Diamkan; chart tetap jalan mode data-only/statis.
       }
     }
 
@@ -59,13 +81,13 @@ export function useTankTarget({ enabled = true } = {}) {
     const timer = setInterval(() => load(false), TTL_MS)
 
     function handleRecipeChanged(event) {
-      const value = validTarget(event?.detail?.ppmTarget)
-      if (value !== null) {
-        cached = { value, fetchedAt: Date.now() }
-        if (!cancelled) setTarget(value)
-      } else {
-        load(true)
-      }
+      const detail = event?.detail
+      const next =
+        detail?.recipe !== null && typeof detail?.recipe === 'object'
+          ? pickRecipe(detail.recipe)
+          : { ...cached.recipe, ppmTarget: validPpm(detail?.ppmTarget) }
+      cached = { recipe: next, fetchedAt: Date.now() }
+      if (!cancelled) setRecipe(next)
     }
     window.addEventListener(TANK_RECIPE_CHANGED_EVENT, handleRecipeChanged)
 
@@ -76,5 +98,5 @@ export function useTankTarget({ enabled = true } = {}) {
     }
   }, [enabled])
 
-  return target
+  return recipe
 }

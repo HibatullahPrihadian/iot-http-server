@@ -50,7 +50,7 @@ export default function TankRecipePicker({ onChanged }) {
     setBusy(true)
     try {
       const updated = await put('/tank/recipe', { recipeId: value === '' ? null : Number(value) })
-      notifyTankRecipeChanged(updated?.recipe?.ppmTarget)
+      notifyTankRecipeChanged(updated?.recipe)
       if (onChanged) onChanged()
     } catch (err) {
       setError(err.message)

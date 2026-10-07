@@ -148,8 +148,9 @@ export function computeYMax(values, meta, recipeTarget) {
     ? nums.reduce((m, v) => Math.max(m, Number(v)), -Infinity)
     : null
   let floor
-  if (meta.floorFromRecipe && recipeTarget !== null && recipeTarget !== undefined) {
-    floor = Number(recipeTarget)
+  const rt = recipeTarget?.ppmTarget ?? recipeTarget
+  if (meta.floorFromRecipe && rt !== null && rt !== undefined) {
+    floor = Number(rt)
     if (!Number.isFinite(floor)) floor = undefined
   } else if (meta.yMaxFloor !== undefined) {
     floor = meta.yMaxFloor
@@ -261,8 +262,9 @@ function borderLine(y) {
   }
 }
 
-// Garis target dinamis (hijau) untuk TDS: mengikuti ppmTarget resep tangki aktif.
-function targetLine(y) {
+// Garis target dinamis (hijau): mengikuti batas resep tangki aktif.
+// TDS: `Target <y> ppm`. pH: label bebas mis. `pH 5.8`.
+function targetLine(y, label) {
   return {
     type: 'line',
     yMin: y,
@@ -272,12 +274,13 @@ function targetLine(y) {
     borderDash: [4, 4],
     label: {
       display: true,
-      content: `Target ${y} ppm`,
+      content: label,
       position: 'end',
     },
   }
 }
 
+// target: angka tunggal (TDS = ppmTarget) atau objek { phMin, phMax } (pH).
 export function annotationsFor(key, target) {
   switch (key) {
     case 'kadar_tds': {
@@ -285,11 +288,20 @@ export function annotationsFor(key, target) {
         return { garisBawah: borderLine(700), garisAtas: borderLine(1300) }
       }
       const t = Number(target)
-      if (Number.isFinite(t)) return { garisTarget: targetLine(t) }
+      if (Number.isFinite(t)) return { garisTarget: targetLine(t, `Target ${t} ppm`) }
       return { garisBawah: borderLine(700), garisAtas: borderLine(1300) }
     }
-    case 'kadar_ph':
+    case 'kadar_ph': {
+      const phMin = Number(target?.phMin)
+      const phMax = Number(target?.phMax)
+      if (Number.isFinite(phMin) && Number.isFinite(phMax) && phMin <= phMax) {
+        return {
+          garisBawah: targetLine(phMin, `pH ${target.phMin}`),
+          garisAtas: targetLine(phMax, `pH ${target.phMax}`),
+        }
+      }
       return { garisBawah: borderLine(5.5), garisAtas: borderLine(6.5) }
+    }
     case 'suhu_air':
       return { garisAtas: borderLine(30) }
     case 'suhu_udara':
