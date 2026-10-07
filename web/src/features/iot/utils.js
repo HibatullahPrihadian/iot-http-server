@@ -261,10 +261,33 @@ function borderLine(y) {
   }
 }
 
-export function annotationsFor(key) {
+// Garis target dinamis (hijau) untuk TDS: mengikuti ppmTarget resep tangki aktif.
+function targetLine(y) {
+  return {
+    type: 'line',
+    yMin: y,
+    yMax: y,
+    borderColor: 'rgba(48, 209, 88, 0.7)',
+    borderWidth: 1.5,
+    borderDash: [4, 4],
+    label: {
+      display: true,
+      content: `Target ${y} ppm`,
+      position: 'end',
+    },
+  }
+}
+
+export function annotationsFor(key, target) {
   switch (key) {
-    case 'kadar_tds':
+    case 'kadar_tds': {
+      if (target === null || target === undefined) {
+        return { garisBawah: borderLine(700), garisAtas: borderLine(1300) }
+      }
+      const t = Number(target)
+      if (Number.isFinite(t)) return { garisTarget: targetLine(t) }
       return { garisBawah: borderLine(700), garisAtas: borderLine(1300) }
+    }
     case 'kadar_ph':
       return { garisBawah: borderLine(5.5), garisAtas: borderLine(6.5) }
     case 'suhu_air':

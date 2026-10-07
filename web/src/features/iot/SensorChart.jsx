@@ -67,13 +67,18 @@ export default function SensorChart({ sensorKey, labels, values, height = 230 })
     [labels, values, meta.color]
   )
 
+  const annotations = useMemo(
+    () => annotationsFor(sensorKey, sensorKey === 'kadar_tds' ? tankTarget : undefined),
+    [sensorKey, tankTarget]
+  )
+
   const options = useMemo(
     () => ({
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
-        annotation: { annotations: annotationsFor(sensorKey) },
+        annotation: { annotations },
       },
       scales: {
         x: {
@@ -89,7 +94,7 @@ export default function SensorChart({ sensorKey, labels, values, height = 230 })
       },
       interaction: { mode: 'index', intersect: false },
     }),
-    [sensorKey, meta.yMin, yMax]
+    [sensorKey, meta.yMin, yMax, annotations]
   )
 
   return (
