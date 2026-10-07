@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { get, put } from '../api.js'
+import { notifyTankRecipeChanged } from '../features/iot/useTankTarget.js'
 
 const SELECT =
   'w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 text-sm text-text-body ' +
@@ -48,7 +49,8 @@ export default function TankRecipePicker({ onChanged }) {
     setError('')
     setBusy(true)
     try {
-      await put('/tank/recipe', { recipeId: value === '' ? null : Number(value) })
+      const updated = await put('/tank/recipe', { recipeId: value === '' ? null : Number(value) })
+      notifyTankRecipeChanged(updated?.recipe?.ppmTarget)
       if (onChanged) onChanged()
     } catch (err) {
       setError(err.message)
