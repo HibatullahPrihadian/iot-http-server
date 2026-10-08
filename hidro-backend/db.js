@@ -37,7 +37,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS PlantBatch (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tableNumber INTEGER NOT NULL CHECK (tableNumber IN (1,2)),
+    tableNumber INTEGER NOT NULL CHECK (tableNumber IN (1,2,3)),
     pipeNumber INTEGER NOT NULL CHECK (pipeNumber BETWEEN 1 AND 6),
     plantId INTEGER NOT NULL REFERENCES PlantCatalog(id),
     sowDate TEXT NOT NULL,
@@ -46,6 +46,44 @@ db.exec(`
     status TEXT NOT NULL
   );
 `);
+
+// Migrasi CHECK tableNumber (1,2) -> (1,2,3) untuk DB lama (Meja 3 pembibitan).
+// CREATE TABLE IF NOT EXISTS tidak mengubah tabel yang sudah ada, jadi rebuild bila perlu.
+{
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'PlantBatch'").get();
+  const sql = row && row.sql ? row.sql : '';
+  if (sql.includes('IN (1,2)') && !sql.includes('1,2,3')) {
+    try {
+      db.transaction(() => {
+        db.exec('ALTER TABLE PlantBatch RENAME TO PlantBatch_old');
+        db.exec(`
+          CREATE TABLE PlantBatch (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tableNumber INTEGER NOT NULL CHECK (tableNumber IN (1,2,3)),
+            pipeNumber INTEGER NOT NULL CHECK (pipeNumber BETWEEN 1 AND 6),
+            plantId INTEGER NOT NULL REFERENCES PlantCatalog(id),
+            sowDate TEXT NOT NULL,
+            transferDate TEXT NOT NULL,
+            harvestDate TEXT NOT NULL,
+            status TEXT NOT NULL,
+            notes TEXT,
+            harvestedAt TEXT,
+            archivedAt TEXT,
+            harvestWeightGram INTEGER
+          );
+        `);
+        const oldCols = db.prepare('PRAGMA table_info(PlantBatch_old)').all().map((c) => c.name);
+        const wanted = ['id', 'tableNumber', 'pipeNumber', 'plantId', 'sowDate', 'transferDate', 'harvestDate', 'status', 'notes', 'harvestedAt', 'archivedAt', 'harvestWeightGram'];
+        const cols = wanted.filter((c) => oldCols.includes(c));
+        db.exec(`INSERT INTO PlantBatch (${cols.join(', ')}) SELECT ${cols.join(', ')} FROM PlantBatch_old`);
+        db.exec('DROP TABLE PlantBatch_old');
+      })();
+      console.log('Migrasi: PlantBatch.tableNumber CHECK -> IN (1,2,3).');
+    } catch (err) {
+      console.error('Migrasi Meja 3 gagal:', err.message);
+    }
+  }
+}
 
 // Migrasi aditif kolom Fase 2.
 addColumnIfMissing('PlantBatch', 'notes', 'TEXT');

@@ -5,11 +5,13 @@ import NotesImages from './NotesImages.jsx'
 import NutritionPanel from './NutritionPanel.jsx'
 import ConfirmDialog from './ConfirmDialog.jsx'
 
-// Modal: form tanam baru (pipa kosong) atau detail + edit + panen (pipa terisi).
+// Modal: form tanam baru (pipa kosong Meja 3) atau detail + edit + panen/pindah.
+// Meja 3 = pembibitan (tanam + pindah, tanpa panen). Meja 1-2 = pembesaran (panen, tanpa tanam).
 export default function PlantModal({
   modal,
   catalog,
   batch,
+  batches,
   onClose,
   onSaved,
   onOpenHistory,
@@ -22,6 +24,11 @@ export default function PlantModal({
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [transferMode, setTransferMode] = useState(false)
+  const [toTable, setToTable] = useState('1')
+  const [toPipe, setToPipe] = useState('')
+
+  const isNursery = modal.tableNumber === 3
 
   useEffect(() => {
     if (!modal.open) return
@@ -30,6 +37,9 @@ export default function PlantModal({
     setEditMode(false)
     setWeight('')
     setConfirmOpen(false)
+    setTransferMode(false)
+    setToTable('1')
+    setToPipe('')
     if (batch) {
       setPlantId(String(batch.plantId))
       setSowDate(batch.sowDate)
@@ -40,6 +50,17 @@ export default function PlantModal({
   }, [modal, batch, catalog])
 
   if (!modal.open) return null
+
+  // Pipa kosong per meja pembesaran (untuk dropdown tujuan pindah).
+  const emptyPipes = (tableNumber) => {
+    const filled = new Set(
+      (batches || [])
+        .filter((b) => b.tableNumber === tableNumber)
+        .map((b) => b.pipeNumber)
+    )
+    return [1, 2, 3, 4, 5, 6].filter((p) => !filled.has(p))
+  }
+  const emptyDest = emptyPipes(Number(toTable))
 
   async function handlePlant(e) {
     e.preventDefault()
@@ -99,6 +120,23 @@ export default function PlantModal({
     } finally {
       setBusy(false)
       setConfirmOpen(false)
+    }
+  }
+
+  async function handleTransfer(e) {
+    e.preventDefault()
+    setError('')
+    setBusy(true)
+    try {
+      await post(`/batches/${batch.id}/transfer`, {
+        toTable: Number(toTable),
+        toPipe: Number(toPipe),
+      })
+      onSaved()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -178,6 +216,67 @@ export default function PlantModal({
                 </button>
               </div>
             </div>
+          ) : transferMode && isNursery ? (
+            <form onSubmit={handleTransfer} className="space-y-4">
+              <p className="text-sm text-text-dim">
+                Pindahkan <strong className="text-text-hi">{batch.plantName}</strong> dari
+                Meja 3 Pipa {modal.pipeNumber} ke pipa kosong di Meja 1-2.
+                Umur tanaman tidak berubah.
+              </p>
+              <label className="block">
+                <span className="text-sm font-medium text-mid">Meja tujuan</span>
+                <select
+                  value={toTable}
+                  onChange={(e) => {
+                    setToTable(e.target.value)
+                    setToPipe('')
+                  }}
+                  className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2
+                    text-text-body focus:outline-none focus:border-ios-blue focus:ring-2 focus:ring-ios-blue/30"
+                >
+                  <option value="1" className="bg-neutral-900 text-text-body">Meja 1 · Pembesaran</option>
+                  <option value="2" className="bg-neutral-900 text-text-body">Meja 2 · Pembesaran</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-sm font-medium text-mid">Pipa tujuan (kosong)</span>
+                <select
+                  value={toPipe}
+                  onChange={(e) => setToPipe(e.target.value)}
+                  className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2
+                    text-text-body focus:outline-none focus:border-ios-blue focus:ring-2 focus:ring-ios-blue/30"
+                >
+                  <option value="">Pilih pipa...</option>
+                  {emptyDest.map((p) => (
+                    <option key={p} value={p} className="bg-neutral-900 text-text-body">
+                      Pipa {p}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {emptyDest.length === 0 && (
+                <p className="text-xs text-ios-orange">Meja {toTable} penuh, pilih meja lain.</p>
+              )}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTransferMode(false)}
+                  disabled={busy}
+                  className="btn-ios flex-1 border border-white/10 text-text-dim
+                    py-2.5 hover:bg-white/5"
+                >
+                  Kembali
+                </button>
+                <button
+                  type="submit"
+                  disabled={busy || !toPipe}
+                  className="btn-ios flex-1 bg-ios-blue hover:shadow-glow-blue disabled:opacity-60
+                    text-white py-2.5"
+                >
+                  {busy ? 'Memindah...' : 'Konfirmasi Pindah'}
+                </button>
+              </div>
+            </form>
           ) : (
             <div className="space-y-3">
               <dl className="text-sm text-text-dim space-y-2">
@@ -192,31 +291,45 @@ export default function PlantModal({
                 />
               </dl>
 
-              <div className="border-t border-white/10 pt-3">
-                <label className="block text-sm font-medium text-mid mb-1">
-                  Berat panen (gram, opsional)
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  value={weight}
-                  onChange={(e) => setWeight(e.target.value)}
-                  placeholder="mis. 500"
-                  className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 text-sm
-                    text-text-body placeholder:text-text-low
-                    focus:outline-none focus:border-ios-blue focus:ring-2 focus:ring-ios-blue/30"
-                />
-              </div>
+              {isNursery ? (
+                <button
+                  type="button"
+                  onClick={() => setTransferMode(true)}
+                  disabled={busy}
+                  className="btn-ios w-full bg-ios-blue hover:shadow-glow-blue disabled:opacity-60
+                    text-white py-2.5"
+                >
+                  Pindahkan ke Pembesaran
+                </button>
+              ) : (
+                <>
+                  <div className="border-t border-white/10 pt-3">
+                    <label className="block text-sm font-medium text-mid mb-1">
+                      Berat panen (gram, opsional)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={weight}
+                      onChange={(e) => setWeight(e.target.value)}
+                      placeholder="mis. 500"
+                      className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 text-sm
+                        text-text-body placeholder:text-text-low
+                        focus:outline-none focus:border-ios-blue focus:ring-2 focus:ring-ios-blue/30"
+                    />
+                  </div>
 
-              <button
-                type="button"
-                onClick={handleHarvest}
-                disabled={busy}
-                className="btn-ios w-full bg-ios-orange hover:shadow-glow-orange disabled:opacity-60
-                  text-black py-2.5"
-              >
-                {busy ? 'Memproses...' : 'Tandai Panen'}
-              </button>
+                  <button
+                    type="button"
+                    onClick={handleHarvest}
+                    disabled={busy}
+                    className="btn-ios w-full bg-ios-orange hover:shadow-glow-orange disabled:opacity-60
+                      text-black py-2.5"
+                  >
+                    {busy ? 'Memproses...' : 'Tandai Panen'}
+                  </button>
+                </>
+              )}
 
               <div className="flex gap-2">
                 <button
@@ -255,7 +368,7 @@ export default function PlantModal({
               </button>
             </div>
           )
-        ) : (
+        ) : isNursery ? (
           <form onSubmit={handlePlant} className="space-y-4">
             <PlantFields
               catalog={catalog}
@@ -275,6 +388,11 @@ export default function PlantModal({
               {busy ? 'Menanam...' : 'Tanam'}
             </button>
           </form>
+        ) : (
+          <div className="rounded-lg bg-white/5 border border-white/10 px-3 py-3 text-sm text-text-dim">
+            Meja pembesaran hanya diisi via Pindah dari Meja 3 (pembibitan).
+            Tanam baru dilakukan di Meja 3.
+          </div>
         )}
       </div>
 

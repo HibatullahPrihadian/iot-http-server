@@ -297,7 +297,7 @@ export default function CatalogPage({ catalog, onChanged }) {
         <section className="glass-panel p-5">
           <h2 className="text-base font-bold text-text-hi mb-1">Resep Tangki Aktif</h2>
           <p className="text-[11px] text-text-low mb-3">
-            Resep RCP yang dipakai di tangki (satu tangki untuk 2 meja).
+            Resep RCP yang dipakai di tangki (satu tangki untuk 3 meja).
           </p>
           <TankRecipePicker onChanged={onChanged} />
         </section>

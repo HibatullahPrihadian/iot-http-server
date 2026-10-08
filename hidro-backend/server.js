@@ -358,8 +358,12 @@ app.post('/api/batches', (req, res) => {
   try {
     const { tableNumber, pipeNumber, plantId, sowDate } = req.body || {};
 
-    if (![1, 2].includes(tableNumber)) {
-      return res.status(400).json({ error: 'tableNumber harus 1 atau 2' });
+    if (![1, 2, 3].includes(tableNumber)) {
+      return res.status(400).json({ error: 'tableNumber harus 1, 2, atau 3' });
+    }
+    // Meja 3 = pembibitan (tanam baru di sini); Meja 1-2 = pembesaran (hanya via pindahan).
+    if (tableNumber === 1 || tableNumber === 2) {
+      return res.status(403).json({ error: 'Meja 1-2 hanya diisi via pindahan dari Meja 3' });
     }
     if (!Number.isInteger(pipeNumber) || pipeNumber < 1 || pipeNumber > 6) {
       return res.status(400).json({ error: 'pipeNumber harus 1-6' });
@@ -659,8 +663,8 @@ app.get('/api/batches/history', (req, res) => {
     const params = [];
 
     if (tableNumber) {
-      if (!['1', '2'].includes(String(tableNumber))) {
-        return res.status(400).json({ error: 'tableNumber harus 1 atau 2' });
+      if (!['1', '2', '3'].includes(String(tableNumber))) {
+        return res.status(400).json({ error: 'tableNumber harus 1, 2, atau 3' });
       }
       where.push('b.tableNumber = ?');
       params.push(Number(tableNumber));
@@ -774,6 +778,10 @@ app.post('/api/batches/:id/harvest', (req, res) => {
     const batch = db.prepare('SELECT * FROM PlantBatch WHERE id = ?').get(id);
     if (!batch) return res.status(404).json({ error: 'Batch tidak ditemukan' });
     if (batch.archivedAt) return res.status(409).json({ error: 'Batch sudah dipanen' });
+    // Meja 3 = pembibitan: tidak bisa dipanen langsung, pindahkan dulu ke Meja 1/2.
+    if (batch.tableNumber === 3) {
+      return res.status(409).json({ error: 'Bibit di Meja 3 tidak bisa dipanen, pindahkan dulu ke Meja 1/2' });
+    }
 
     const weight = req.body?.harvestWeightGram;
     if (weight !== undefined && weight !== null) {
@@ -804,6 +812,62 @@ app.post('/api/batches/:id/harvest', (req, res) => {
       durationDays: daysBetween(row.sowDate, now.slice(0, 10)),
     });
   } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/batches/:id/transfer -> pindah bibit Meja 3 ke pipa kosong Meja 1/2.
+// Tanggal (sowDate/transferDate/harvestDate) tidak berubah; hanya lokasi pindah.
+app.post('/api/batches/:id/transfer', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'id tidak valid' });
+
+    const batch = db.prepare('SELECT * FROM PlantBatch WHERE id = ?').get(id);
+    if (!batch) return res.status(404).json({ error: 'Batch tidak ditemukan' });
+    if (batch.archivedAt) {
+      return res.status(409).json({ error: 'Batch sudah diarsipkan, tidak bisa dipindah' });
+    }
+    if (batch.tableNumber !== 3) {
+      return res.status(403).json({ error: 'Hanya bibit dari Meja 3 yang bisa dipindah' });
+    }
+
+    const toTable = Number(req.body?.toTable);
+    const toPipe = Number(req.body?.toPipe);
+    if (![1, 2].includes(toTable)) {
+      return res.status(400).json({ error: 'toTable harus 1 atau 2' });
+    }
+    if (!Number.isInteger(toPipe) || toPipe < 1 || toPipe > 6) {
+      return res.status(400).json({ error: 'toPipe harus 1-6' });
+    }
+
+    const occupied = db
+      .prepare(
+        'SELECT id FROM PlantBatch WHERE tableNumber = ? AND pipeNumber = ? AND archivedAt IS NULL'
+      )
+      .get(toTable, toPipe);
+    if (occupied) {
+      return res.status(409).json({ error: 'Pipa tujuan sudah terisi' });
+    }
+
+    db.prepare('UPDATE PlantBatch SET tableNumber = ?, pipeNumber = ? WHERE id = ?').run(
+      toTable,
+      toPipe,
+      id
+    );
+
+    const row = db
+      .prepare(
+        `SELECT b.*, c.name AS plantName, c.totalDays AS totalDays
+         FROM PlantBatch b JOIN PlantCatalog c ON c.id = b.plantId WHERE b.id = ?`
+      )
+      .get(id);
+    res.json(compute(row));
+  } catch (err) {
+    if (err && typeof err.code === 'string' && err.code.startsWith('SQLITE_CONSTRAINT')) {
+      return res.status(409).json({ error: 'Pipa tujuan sudah terisi' });
+    }
     console.error(err);
     res.status(500).json({ error: 'Server error' });
   }
@@ -1172,7 +1236,7 @@ app.get('/api/stats/summary', (req, res) => {
       realisasi: Math.round((p.total / p.n) * 10) / 10,
     }));
 
-    // Keterisian: batch aktif / 12 pipa.
+    // Keterisian: batch aktif / 18 pipa (3 meja x 6 pipa).
     const occupied = db
       .prepare('SELECT COUNT(*) AS n FROM PlantBatch WHERE archivedAt IS NULL')
       .get().n;
@@ -1181,7 +1245,7 @@ app.get('/api/stats/summary', (req, res) => {
       harvestByMonth,
       harvestByPlant,
       estimasiVsRealisasi,
-      occupancy: { occupied, total: 12, ratio: occupied / 12 },
+      occupancy: { occupied, total: 18, ratio: occupied / 18 },
     });
   } catch (err) {
     console.error(err);

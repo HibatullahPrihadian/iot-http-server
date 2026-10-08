@@ -56,8 +56,9 @@ function PlanLayout() {
   }, [load])
 
   // Susun grid: { tableNumber: { pipeNumber: batch } }
-  const byTable = { 1: {}, 2: {} }
+  const byTable = { 1: {}, 2: {}, 3: {} }
   for (const b of batches) {
+    if (!byTable[b.tableNumber]) byTable[b.tableNumber] = {}
     byTable[b.tableNumber][b.pipeNumber] = b
   }
 
@@ -102,7 +103,8 @@ function PlanLayout() {
         <div>
           <h1 className="text-xl font-bold text-text-hi">Plan Hidroponik</h1>
           <p className="hidden md:block text-sm text-text-low">
-            2 meja &middot; 6 pipa per meja &middot; klik pipa untuk tanam / lihat detail
+            3 meja &middot; 6 pipa per meja &middot; Meja 3 pembibitan, Meja 1-2 pembesaran
+            &middot; klik pipa untuk tanam / lihat detail
           </p>
         </div>
         <Tabs active={tab} onChange={changeTab} />
@@ -129,13 +131,25 @@ function PlanLayout() {
               <div className="space-y-6">
                 <TankPanel onGoCatalog={() => changeTab('catalog')} />
                 <TableSection
+                  tableNumber={3}
+                  title="Meja 3 · Pembibitan"
+                  hint="Tanam baru di sini, pindahkan ke Meja 1-2 saat siap"
+                  batches={byTable[3]}
+                  onPipeClick={openPipe}
+                  onHistoryClick={openHistory}
+                />
+                <TableSection
                   tableNumber={1}
+                  title="Meja 1 · Pembesaran"
+                  hint="Hanya diisi via pindahan dari Meja 3"
                   batches={byTable[1]}
                   onPipeClick={openPipe}
                   onHistoryClick={openHistory}
                 />
                 <TableSection
                   tableNumber={2}
+                  title="Meja 2 · Pembesaran"
+                  hint="Hanya diisi via pindahan dari Meja 3"
                   batches={byTable[2]}
                   onPipeClick={openPipe}
                   onHistoryClick={openHistory}
@@ -154,6 +168,7 @@ function PlanLayout() {
         modal={modal}
         catalog={catalog}
         batch={activeBatch}
+        batches={batches}
         hasHistory={activeModalHasHistory}
         onClose={closeModal}
         onSaved={handleSaved}

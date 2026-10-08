@@ -18,7 +18,7 @@ const INPUT =
   'w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 text-sm text-text-body ' +
   'placeholder:text-text-low focus:outline-none focus:border-ios-blue focus:ring-2 focus:ring-ios-blue/30'
 
-// Panel resep tangki (satu tangki global untuk 2 meja) yang tampil di atas Meja 1:
+// Panel resep tangki (satu tangki global untuk 3 meja) yang tampil di atas Meja 3:
 // resep aktif, kalkulator dosis, dan pembacaan sensor IoT terakhir.
 export default function TankPanel({ onGoCatalog }) {
   const [loading, setLoading] = useState(true)
@@ -109,7 +109,7 @@ export default function TankPanel({ onGoCatalog }) {
         )}
       </div>
       <p className="text-[11px] text-text-low mt-1">
-        Satu tangki untuk 2 meja. Nilai sensor adalah kondisi tangki total, bukan per pipa.
+        Satu tangki untuk 3 meja. Nilai sensor adalah kondisi tangki total, bukan per pipa.
       </p>
 
       {error && (

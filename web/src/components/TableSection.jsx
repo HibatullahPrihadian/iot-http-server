@@ -1,8 +1,10 @@
 import PipeTube from './PipeTube.jsx'
 
-// Satu meja = 6 pipa PVC.
+// Satu meja = 6 pipa PVC. Meja 3 = pembibitan, Meja 1-2 = pembesaran.
 export default function TableSection({
   tableNumber,
+  title,
+  hint,
   batches,
   onPipeClick,
   onHistoryClick,
@@ -11,7 +13,9 @@ export default function TableSection({
 
   return (
     <section className="glass-panel p-5">
-      <h2 className="text-lg font-bold text-text-hi mb-4">Meja {tableNumber}</h2>
+      <h2 className="text-lg font-bold text-text-hi">{title || `Meja ${tableNumber}`}</h2>
+      {hint && <p className="text-xs text-text-low mt-0.5 mb-4">{hint}</p>}
+      {!hint && <div className="mb-4" />}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
         {pipes.map((pipeNumber) => (
           <PipeTube

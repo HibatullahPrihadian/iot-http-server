@@ -111,6 +111,7 @@ export default function HistoryPage({ catalog }) {
             <option value="">Semua</option>
             <option value="1">Meja 1</option>
             <option value="2">Meja 2</option>
+            <option value="3">Meja 3</option>
           </select>
         </Field>
         <Field label="Pipa">
