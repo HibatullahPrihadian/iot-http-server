@@ -264,7 +264,8 @@ function borderLine(y) {
 
 // Garis target dinamis (hijau): mengikuti batas resep tangki aktif.
 // TDS: `Target <y> ppm`. pH: label bebas mis. `pH 5.8`.
-function targetLine(y, label) {
+// position: 'start' (kiri) | 'center' | 'end' (kanan, default plugin v3).
+function targetLine(y, label, position = 'end') {
   return {
     type: 'line',
     yMin: y,
@@ -275,7 +276,7 @@ function targetLine(y, label) {
     label: {
       display: true,
       content: label,
-      position: 'end',
+      position,
     },
   }
 }
@@ -296,8 +297,8 @@ export function annotationsFor(key, target) {
       const phMax = Number(target?.phMax)
       if (Number.isFinite(phMin) && Number.isFinite(phMax) && phMin <= phMax) {
         return {
-          garisBawah: targetLine(phMin, `pH ${target.phMin}`),
-          garisAtas: targetLine(phMax, `pH ${target.phMax}`),
+          garisBawah: targetLine(phMin, `pH ${target.phMin}`, 'start'),
+          garisAtas: targetLine(phMax, `pH ${target.phMax}`, 'end'),
         }
       }
       return { garisBawah: borderLine(5.5), garisAtas: borderLine(6.5) }
