@@ -54,6 +54,9 @@ db.exec(`
   const sql = row && row.sql ? row.sql : '';
   if (sql.includes('IN (1,2)') && !sql.includes('1,2,3')) {
     try {
+      // FK OFF selama rebuild: cegah (a) FK anak ditulis ulang ke PlantBatch_old, dan
+      // (b) DROP PlantBatch_old men-cascade / menghapus baris BatchImage & BatchReading.
+      db.pragma('foreign_keys = OFF');
       db.transaction(() => {
         db.exec('ALTER TABLE PlantBatch RENAME TO PlantBatch_old');
         db.exec(`
@@ -81,6 +84,73 @@ db.exec(`
       console.log('Migrasi: PlantBatch.tableNumber CHECK -> IN (1,2,3).');
     } catch (err) {
       console.error('Migrasi Meja 3 gagal:', err.message);
+    } finally {
+      db.pragma('foreign_keys = ON');
+    }
+  }
+}
+
+// Perbaikan DB yang sempat dimigrasi versi lama: FK BatchImage/BatchReading
+// menunjuk tabel sementara PlantBatch_old yang sudah di-DROP -> cascade DELETE gagal
+// ("no such table: main.PlantBatch_old"). Rebuild tabel anak agar FK kembali benar.
+{
+  const dangling = (table) => {
+    const r = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table);
+    return !!(r && r.sql && r.sql.includes('PlantBatch_old'));
+  };
+  const hasOldParent = !!db
+    .prepare("SELECT 1 FROM sqlite_master WHERE name='PlantBatch_old'")
+    .get();
+
+  if (dangling('BatchImage') || dangling('BatchReading')) {
+    try {
+      db.pragma('foreign_keys = OFF');
+      db.transaction(() => {
+        const children = [
+          {
+            name: 'BatchImage',
+            cols: ['id', 'batchId', 'filename', 'createdAt'],
+            ddl: `CREATE TABLE BatchImage (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              batchId INTEGER NOT NULL REFERENCES PlantBatch(id) ON DELETE CASCADE,
+              filename TEXT NOT NULL,
+              createdAt TEXT NOT NULL
+            );`,
+          },
+          {
+            name: 'BatchReading',
+            cols: ['id', 'batchId', 'ppm', 'ph', 'catatan', 'measuredAt'],
+            ddl: `CREATE TABLE BatchReading (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              batchId INTEGER NOT NULL REFERENCES PlantBatch(id) ON DELETE CASCADE,
+              ppm INTEGER,
+              ph REAL,
+              catatan TEXT,
+              measuredAt TEXT NOT NULL
+            );`,
+          },
+        ];
+        for (const c of children) {
+          if (!dangling(c.name)) continue;
+          const old = `${c.name}_old`;
+          db.exec(`ALTER TABLE ${c.name} RENAME TO ${old}`);
+          db.exec(c.ddl);
+          db.exec(
+            `INSERT INTO ${c.name} (${c.cols.join(', ')}) SELECT ${c.cols.join(', ')} FROM ${old}`
+          );
+          db.exec(`DROP TABLE ${old}`);
+          console.log(`Perbaikan: FK ${c.name} dikembalikan ke PlantBatch.`);
+        }
+        // Tabel sementara yatim bila pernah tertinggal.
+        if (hasOldParent) db.exec('DROP TABLE IF EXISTS PlantBatch_old');
+      })();
+      // Laporkan bila masih ada baris anak yatim (batchId ke batch yang hilang).
+      const orphan = db.pragma('foreign_key_check');
+      if (orphan.length) console.warn('FK tersisa bermasalah setelah perbaikan:', orphan);
+    } catch (err) {
+      console.error('Perbaikan FK tabel anak gagal:', err.message);
+    } finally {
+      db.pragma('foreign_keys = ON');
     }
   }
 }
