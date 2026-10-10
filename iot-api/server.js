@@ -43,6 +43,12 @@ function enqueue(command) {
     return entry;
 }
 
+// Angka finite > 0 (tolak 0, negatif, NaN, string non-numerik).
+function isPositiveNumber(v) {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0;
+}
+
 // --- MIDDLEWARE ---
 app.use(cors());
 app.use(express.json());
@@ -159,8 +165,8 @@ app.post('/api/pompa/kontrol', (req, res) => {
     try {
         const { durasi } = req.body;
 
-        if (!durasi) {
-            return res.status(400).json({ success: false, message: "Parameter tidak lengkap!" });
+        if (!isPositiveNumber(durasi)) {
+            return res.status(400).json({ success: false, message: "durasi harus angka > 0!" });
         }
 
         enqueue({ type: 'pompa', durasi: Number(durasi) });
@@ -179,8 +185,8 @@ app.post('/api/interval/kontrol', (req, res) => {
     try {
         const { intervalDetik } = req.body;
 
-        if (!intervalDetik) {
-            return res.status(400).json({ success: false, message: "Parameter interval tidak lengkap!" });
+        if (!isPositiveNumber(intervalDetik)) {
+            return res.status(400).json({ success: false, message: "intervalDetik harus angka > 0!" });
         }
 
         enqueue({ type: 'interval', intervalDetik: Number(intervalDetik) });
@@ -199,8 +205,8 @@ app.post('/api/autodosing/kontrol', (req, res) => {
     try {
         const { targetTds, volumeAir, konstantaPupuk } = req.body;
 
-        if (!targetTds || !volumeAir || !konstantaPupuk) {
-            return res.status(400).json({ success: false, message: "Semua parameter harus diisi!" });
+        if (!isPositiveNumber(targetTds) || !isPositiveNumber(volumeAir) || !isPositiveNumber(konstantaPupuk)) {
+            return res.status(400).json({ success: false, message: "Semua parameter harus angka > 0!" });
         }
 
         enqueue({
@@ -228,7 +234,15 @@ app.post('/api/relay/kontrol', (req, res) => {
             return res.status(400).json({ success: false, message: "Parameter tidak lengkap!" });
         }
 
-        enqueue({ type: 'relay', idRelay: Number(idRelay), status: status === 'ON' ? 'ON' : 'OFF' });
+        const relayId = Number(idRelay);
+        if (![1, 2, 3, 4].includes(relayId)) {
+            return res.status(400).json({ success: false, message: "idRelay harus 1-4!" });
+        }
+        if (status !== 'ON' && status !== 'OFF') {
+            return res.status(400).json({ success: false, message: "status harus 'ON' atau 'OFF'!" });
+        }
+
+        enqueue({ type: 'relay', idRelay: relayId, status });
         res.json({ success: true, message: `Relay ${idRelay} berhasil diubah menjadi ${status}` });
     } catch (error) {
         console.error("Error Kontrol Relay:", error.message);
@@ -262,11 +276,12 @@ app.get('/api/relay/status', async (req, res) => {
                 next(row, tableMeta) {
                     const obj = tableMeta.toObject(row);
                     
-                    // Jika data ada di database, ubah angka 1 menjadi ON, dan 0 menjadi OFF
-                    if (obj.relay_1 !== undefined) statusRelay.relay_1 = obj.relay_1 === 1 ? "ON" : "OFF";
-                    if (obj.relay_2 !== undefined) statusRelay.relay_2 = obj.relay_2 === 1 ? "ON" : "OFF";
-                    if (obj.relay_3 !== undefined) statusRelay.relay_3 = obj.relay_3 === 1 ? "ON" : "OFF";
-                    if (obj.relay_4 !== undefined) statusRelay.relay_4 = obj.relay_4 === 1 ? "ON" : "OFF";
+                    // Jika data ada di database, ubah angka 1 menjadi ON, dan 0 menjadi OFF.
+                    // Nilai Flux datang sebagai string ("1"/"0"), jadi pakai normalizeRelayStatus.
+                    if (obj.relay_1 !== undefined) statusRelay.relay_1 = normalizeRelayStatus(obj.relay_1);
+                    if (obj.relay_2 !== undefined) statusRelay.relay_2 = normalizeRelayStatus(obj.relay_2);
+                    if (obj.relay_3 !== undefined) statusRelay.relay_3 = normalizeRelayStatus(obj.relay_3);
+                    if (obj.relay_4 !== undefined) statusRelay.relay_4 = normalizeRelayStatus(obj.relay_4);
                 },
                 error(error) { reject(error); },
                 complete() { resolve(); },

@@ -1339,14 +1339,13 @@ app.get('/api/stats/nutrition', (req, res) => {
 
 // GET /api/tank -> resep tangki aktif + pembacaan sensor terakhir.
 // Selalu 200; kegagalan sensor dikembalikan sebagai sensorError.
-app.get('/api/tank', async (req, res) => {
+app.get('/api/tank', async (req, res, next) => {
   try {
     const recipe = getActiveTankRecipe();
     const { sensor, sensorError } = await getTankSensor();
     res.json({ recipe: recipe || null, sensor, sensorError });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    next(err);
   }
 });
 
@@ -1426,13 +1425,12 @@ app.post('/api/tank/dose', (req, res) => {
 });
 
 // GET /api/tank/sensor -> data sensor saja (refresh ringan).
-app.get('/api/tank/sensor', async (req, res) => {
+app.get('/api/tank/sensor', async (req, res, next) => {
   try {
     const { sensor, sensorError } = await getTankSensor();
     res.json({ sensor, sensorError, fetchedAt: new Date().toISOString() });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    next(err);
   }
 });
 
