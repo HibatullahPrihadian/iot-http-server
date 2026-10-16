@@ -9,9 +9,9 @@ import {
   PZEM_METRICS,
   PZEM_ORDER,
   downloadPzemCSV,
-  energyDelta,
   estimateCost,
   formatRupiah,
+  formatPeriode,
   parseTariff,
   pzemAlertStatus,
   pzemCardClass,
@@ -73,15 +73,18 @@ export default function ListrikPage() {
     const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(TARIFF_STORAGE_KEY) : null
     return saved !== null ? saved : String(DEFAULT_TARIFF)
   })
-  const { data, loading, error } = useSensorData({ filter, domain: 'listrik', pollMs: 1000 })
+  const { data, loading, error, energy } = useSensorData({ filter, domain: 'listrik', pollMs: 1000 })
 
   const latest = data.length ? data[data.length - 1] : null
   const online = isOnline(latest?.waktu)
   const labels = data.map((row) => timeLabel(row.waktu))
 
   const tariff = parseTariff(tariffInput)
-  const delta = useMemo(() => energyDelta(data), [data])
+  // Pemakaian periode dari backend (dihitung dari data mentah, reset-safe),
+  // bukan dari deret chart yang sudah di-downsample/dipotong.
+  const delta = energy?.period ?? null
   const cost = useMemo(() => estimateCost(delta, tariff), [delta, tariff])
+  const periodeLabel = formatPeriode(energy?.from, energy?.to)
 
   useEffect(() => {
     if (typeof localStorage === 'undefined') return
@@ -172,6 +175,9 @@ export default function ListrikPage() {
             <div className="text-3xl font-bold mt-2 text-white tracking-[-0.5px]">
               {delta === null ? '—' : `${delta.toFixed(3)} kWh`}
             </div>
+            <div className="text-xs text-text-low mt-1">
+              {periodeLabel || 'rentang data terpilih'}
+            </div>
           </div>
           <div>
             <div className="text-sm text-text-low font-semibold uppercase tracking-[0.5px]">
@@ -180,6 +186,9 @@ export default function ListrikPage() {
             <div className="text-3xl font-bold mt-2 text-ios-green tracking-[-0.5px]">
               {formatRupiah(cost)}
             </div>
+            {periodeLabel && (
+              <div className="text-xs text-text-low mt-1">untuk {periodeLabel}</div>
+            )}
           </div>
           <div className="flex flex-col items-start">
             <label className="font-semibold mb-2 text-text-low text-xs uppercase tracking-[0.5px]">
@@ -197,8 +206,8 @@ export default function ListrikPage() {
         </div>
         {delta === null && (
           <p className="text-xs text-text-low mt-3">
-            Pemakaian periode dihitung dari selisih energi kumulatif; butuh minimal 2 titik data
-            pada rentang terpilih.
+            Pemakaian periode dihitung dari data energi mentah (selisih kumulatif, tahan reset);
+            butuh minimal 2 titik data pada rentang terpilih.
           </p>
         )}
       </div>

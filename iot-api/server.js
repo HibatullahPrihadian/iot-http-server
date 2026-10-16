@@ -72,6 +72,57 @@ function deviceAuth(req, res, next) {
     next();
 }
 
+// Helper: hitung pemakaian energi PZEM (kWh) pada rentang filter, dari data MENTAH
+// (tanpa downsampling/limit chart). Memakai difference(nonNegative:true) |> sum()
+// sehingga kenaikan terjumlah dan reset (nilai turun) diabaikan -> reset-safe.
+// Mengembalikan { period, from, to } atau { period: null } bila data < 2 titik.
+async function hitungEnergiPeriode(rangeQuery) {
+    const queryApi = client.getQueryApi(org);
+    const base = `
+        from(bucket: "${bucket}")
+          |> range(start: ${rangeQuery})
+          |> filter(fn: (r) => r["_measurement"] == "hidroponik_sensor")
+          |> filter(fn: (r) => r["_field"] == "energi")
+          |> filter(fn: (r) => exists r._value)
+          |> keep(columns: ["_time", "_value"])
+          |> sort(columns: ["_time"])`;
+
+    // Total kenaikan (reset-safe) + titik pertama/terakhir dalam satu query.
+    const energyQuery = `
+        union(tables: [
+          ${base} |> difference(nonNegative: true) |> sum() |> map(fn: (r) => ({ _time: r._time, _kind: "total", _value: r._value })),
+          ${base} |> first() |> map(fn: (r) => ({ _time: r._time, _kind: "first", _value: r._value })),
+          ${base} |> last()  |> map(fn: (r) => ({ _time: r._time, _kind: "last",  _value: r._value }))
+        ])`;
+
+    return await new Promise((resolve) => {
+        let total = null;
+        let first = null;
+        let last = null;
+        let count = 0;
+        queryApi.queryRows(energyQuery, {
+            next(row, tableMeta) {
+                const obj = tableMeta.toObject(row);
+                count++;
+                if (obj._kind === 'total') total = obj._value;
+                else if (obj._kind === 'first') first = obj._time;
+                else if (obj._kind === 'last') last = obj._time;
+            },
+            error() {
+                // Jangan gagalkan seluruh respons; energi cukup null.
+                resolve({ period: null, from: null, to: null });
+            },
+            complete() {
+                if (total === null || count < 3) {
+                    resolve({ period: null, from: first, to: last });
+                } else {
+                    resolve({ period: total, from: first, to: last });
+                }
+            },
+        });
+    });
+}
+
 // --- ROUTES (API ENDPOINT) ---
 // 1. Route Default (Cek Status Server)
 app.get('/', (req, res) => {
@@ -207,7 +258,26 @@ app.get('/api/sensor-data', async (req, res) => {
                 complete() { resolve(); },
             });
         });
-        res.json({ success: true, count: dataSensor.length, data: dataSensor });
+        // Energi periode (kWh) dihitung dari data mentah, hanya untuk domain listrik.
+        // Dipakai dashboard Listrik agar estimasi biaya tidak memakai data chart
+        // yang sudah di-downsample/dipotong.
+        let energyPeriod = null;
+        let energyFrom = null;
+        let energyTo = null;
+        if (includeListrik) {
+            const e = await hitungEnergiPeriode(rangeQuery);
+            energyPeriod = e.period;
+            energyFrom = e.from;
+            energyTo = e.to;
+        }
+
+        const payload = { success: true, count: dataSensor.length, data: dataSensor };
+        if (includeListrik) {
+            payload.energyPeriod = energyPeriod;
+            payload.energyFrom = energyFrom;
+            payload.energyTo = energyTo;
+        }
+        res.json(payload);
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }

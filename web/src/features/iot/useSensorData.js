@@ -8,6 +8,7 @@ const POLL_MS = 5000
 // pollMs -> override interval polling per pemakaian (mis. Listrik 1000 ms).
 export function useSensorData({ filter = 'realtime', enabled = true, domain = 'hidroponik', pollMs = POLL_MS } = {}) {
   const [data, setData] = useState([])
+  const [energy, setEnergy] = useState({ period: null, from: null, to: null })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const timer = useRef(null)
@@ -20,6 +21,14 @@ export function useSensorData({ filter = 'realtime', enabled = true, domain = 'h
       if (Array.isArray(rows)) {
         setData(rows)
         setError('')
+      }
+      // Energi periode dihitung backend dari data mentah (khusus domain listrik).
+      if (res && typeof res === 'object' && 'energyPeriod' in res) {
+        setEnergy({
+          period: res.energyPeriod ?? null,
+          from: res.energyFrom ?? null,
+          to: res.energyTo ?? null,
+        })
       }
     } catch (err) {
       setError(err.message)
@@ -38,7 +47,7 @@ export function useSensorData({ filter = 'realtime', enabled = true, domain = 'h
     }
   }, [filter, enabled, fetchData, pollMs])
 
-  return { data, loading, error }
+  return { data, loading, error, energy }
 }
 
 // Polling status relay 4 kanal tiap 5 detik.

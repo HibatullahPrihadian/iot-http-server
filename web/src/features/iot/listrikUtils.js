@@ -113,23 +113,35 @@ export function pzemValueOrNull(row, key) {
   return Number.isFinite(n) ? n : null
 }
 
-// Konsumsi energi periode = jumlah kenaikan antar sampel energi kumulatif.
-// Sample berurutan; reset alat (nilai turun) dihitung sebagai awal segmen baru
-// (bukan dibuang), jadi pemakaian setelah reset tetap terhitung.
-// Butuh >= 2 titik; tanpa kenaikan valid -> null.
-export function energyDelta(data) {
-  if (!Array.isArray(data)) return null
-  const nums = data
-    .map((row) => pzemValueOrNull(row, 'energi'))
-    .filter((v) => v !== null)
-  if (nums.length < 2) return null
+// Label rentang periode dari dua timestamp ISO -> "30 hari terakhir (16 Sep–16 Okt)"
+// atau "< 1 hari" dengan jam. Mengembalikan '' bila data kurang.
+export function formatPeriode(fromIso, toIso) {
+  if (!fromIso || !toIso) return ''
+  const from = new Date(fromIso)
+  const to = new Date(toIso)
+  if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime())) return ''
 
-  let total = 0
-  for (let i = 1; i < nums.length; i++) {
-    const step = nums[i] - nums[i - 1]
-    if (step >= 0) total += step // reset (step < 0) -> mulai segmen baru, step diabaikan
+  const ms = to.getTime() - from.getTime()
+  if (ms <= 0) return ''
+
+  const hari = ms / 86400000
+  const jam = ms / 3600000
+
+  const fmtDate = (d) =>
+    d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })
+  const fmtDateTime = (d) =>
+    d.toLocaleString('id-ID', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+
+  if (hari >= 1) {
+    return `${Math.round(hari)} hari terakhir (${fmtDate(from)}–${fmtDate(to)})`
   }
-  return Number.isFinite(total) ? total : null
+  return `${jam.toFixed(1)} jam terakhir (${fmtDateTime(from)}–${fmtDateTime(to)})`
 }
 
 // Estimasi biaya: kWh * tarif (Rp/kWh).
