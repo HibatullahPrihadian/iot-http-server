@@ -30,6 +30,10 @@ const post = (path, body) =>
 export const getSensorData = (filter = 'realtime') =>
   request(`/sensor-data?filter=${encodeURIComponent(filter)}`)
 
+// Data listrik (PZEM-004T): ikut sertakan baris yang hanya berisi data listrik.
+export const getPzemData = (filter = 'realtime') =>
+  request(`/sensor-data?filter=${encodeURIComponent(filter)}&domain=listrik`)
+
 export const getRelayStatus = () => request('/relay/status')
 
 // Resep tangki aktif + sensor terakhir: { recipe, sensor, sensorError }.

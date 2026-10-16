@@ -74,11 +74,15 @@ iot-http-server/
 Semua endpoint diakses lewat nginx pada port `5005` (satu origin). Nginx meneruskan prefix IoT ke `iot-api:3000` dan `/terima-sensor` ke `nodered:1880`.
 
 ### 1. Get Sensor Data
-`GET /api/sensor-data?filter=[...]`
+`GET /api/sensor-data?filter=[...]&domain=[hidroponik|listrik]`
 Mengambil data history sensor dari InfluxDB.
 
 Filter yang didukung (8): `realtime` (default, 40 titik terakhir), `12hour`, `1day`, `1week`, `2week`, `1month`, `3month`, `6month`.
 > Catatan: dokumentasi lama hanya menyebut 5 filter; kode `server.js` adalah sumber kebenaran (8 filter).
+
+`domain` (opsional, default `hidroponik`): `listrik` ikut menyertakan baris yang **hanya** berisi data listrik PZEM-004T. Tanpa `domain=listrik`, baris listrik-only tidak dikembalikan agar dashboard Monitoring tidak kemasukan baris tanpa data hidroponik.
+
+Response berisi field hidroponik (`suhu_udara`, `kelembapan_udara`, `kadar_tds`, `kadar_ph`, `intensitas_uv`, `suhu_air`) **dan** field listrik PZEM-004T (`tegangan`, `arus`, `daya`, `energi`, `frekuensi`, `power_factor`) bila tersedia. Field listrik dinilai `undefined`/`null` hingga perangkat mengirimkannya. Field `energi` (kumulatif) tidak dirata-rata saat downsampling (memakai `last`), agar nilai kWh tetap utuh.
 
 ### 2. Control Pump (Pompa AB Mix)
 `POST /api/pompa/kontrol`
@@ -119,7 +123,24 @@ Perintah di-**enqueue** (bukan lagi MQTT publish). Pompa utama kini dikendalikan
 ```
 > Tanpa wrapper `object`/`objectJSON`, fungsi Node-RED mengembalikan `null` dan data diabaikan.
 
+> **Data listrik (PZEM-004T) TIDAK dikirim lewat endpoint ini.** Firmware NodeMCU mengirim keenam field listrik secara **terpisah** ke `POST /api/listrik/ingest` (lihat §7b), sehingga data listrik tetap masuk walau flow Node-RED belum diperbarui.
+
 > **URL InfluxDB di Node-RED wajib `http://influxdb:8086`** (nama service compose), BUKAN IP host/LAN lama. Bila server pindah jaringan dan flow masih menunjuk IP lama, write ke InfluxDB akan `RequestTimedOutError` → data terbaru tidak pernah tersimpan meski ESP32 melaporkan "terkirim". Cek node config InfluxDB di `nodered-data/flows.json`.
+
+### 7b. Ingest Listrik PZEM-004T (perangkat)
+`POST /api/listrik/ingest` — header `X-Device-Token`. Ditulis **langsung** ke InfluxDB oleh `iot-api` (tidak lewat Node-RED), ke `_measurement` yang sama (`hidroponik_sensor`) agar dashboard Listrik (`/api/sensor-data?domain=listrik`) langsung membacanya.
+
+```json
+{ "object": {
+  "tegangan": 220.5, "arus": 1.23, "daya": 271.2,
+  "energi": 12.345, "frekuensi": 50.0, "power_factor": 0.95
+} }
+```
+Field (satuan): `tegangan` (V), `arus` (A), `daya` (W), `energi` (kWh, **kumulatif** total alat), `frekuensi` (Hz), `power_factor`. Minimal satu field numerik valid; field yang tidak valid/absen dilewati. Body boleh dibungkus `object` atau field langsung.
+
+Respons: `{ "success": true, "fields": <jumlah field tertulis> }`. `400` bila tak ada field valid, `401` bila token salah, `503` bila `DEVICE_TOKEN` belum diisi.
+
+> `energi` bersifat kumulatif; dashboard menghitung pemakaian periode dari selisihnya.
 
 ### 8. Poll Perintah (perangkat)
 `GET /api/device/commands` — header `X-Device-Token`:
@@ -137,7 +158,7 @@ Perintah di-**enqueue** (bukan lagi MQTT publish). Pompa utama kini dikendalikan
 
 ## 🔐 Autentikasi Perangkat
 
-- Semua endpoint perangkat (`/terima-sensor`, `/api/device/*`) wajib menyertakan header `X-Device-Token` yang nilainya sama dengan env `DEVICE_TOKEN` di server.
+- Semua endpoint perangkat (`/terima-sensor`, `/api/listrik/ingest`, `/api/device/*`) wajib menyertakan header `X-Device-Token` yang nilainya sama dengan env `DEVICE_TOKEN` di server.
 - Token yang salah/hilang → `401`. Bila `DEVICE_TOKEN` belum diisi di server → `503`.
 - Token yang sama dipakai oleh `iot-api` (validasi route device) dan Node-RED (validasi ingest).
 

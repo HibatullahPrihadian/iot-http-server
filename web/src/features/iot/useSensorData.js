@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { getSensorData, getRelayStatus } from './api.js'
+import { getSensorData, getPzemData, getRelayStatus } from './api.js'
 
 const POLL_MS = 5000
 
 // Polling data sensor + status relay tiap 5 detik (port dari index.html baris 578-585).
 // paused=window.location.href-true agar tidak fetch saat tab trend memakai hook sendiri.
-export function useSensorData({ filter = 'realtime', enabled = true } = {}) {
+// domain='listrik' -> pakai endpoint listrik (ikut sertakan baris data PZEM saja).
+export function useSensorData({ filter = 'realtime', enabled = true, domain = 'hidroponik' } = {}) {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -13,7 +14,8 @@ export function useSensorData({ filter = 'realtime', enabled = true } = {}) {
 
   const fetchData = useCallback(async (currentFilter) => {
     try {
-      const res = await getSensorData(currentFilter)
+      const fetchFn = domain === 'listrik' ? getPzemData : getSensorData
+      const res = await fetchFn(currentFilter)
       const rows = res?.data ?? res
       if (Array.isArray(rows)) {
         setData(rows)
@@ -24,7 +26,7 @@ export function useSensorData({ filter = 'realtime', enabled = true } = {}) {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [domain])
 
   useEffect(() => {
     if (!enabled) return undefined

@@ -2,7 +2,7 @@
 
 Satu aplikasi web (React) yang menggabungkan dua sistem:
 
-1. **Monitoring IoT** — dashboard sensor realtime (via InfluxDB) + kontrol aktuator & relay. Perangkat ESP32 terhubung lewat **HTTP/WiFi** (uplink JSON + polling perintah), bukan LoRaWAN/MQTT.
+1. **Monitoring IoT** — dashboard sensor realtime (via InfluxDB) + kontrol aktuator & relay. Perangkat ESP32 terhubung lewat **HTTP/WiFi** (uplink JSON + polling perintah), bukan LoRaWAN/MQTT. Termasuk **dashboard Listrik** (PZEM-004T): tegangan, arus, daya, energi, frekuensi, faktor daya, + estimasi biaya.
 2. **Plan Tanam** — pemantauan masa tanam & estimasi panen 2 meja hidroponik (6 pipa PVC per meja), riwayat panen, statistik, katalog tanaman, dan resep nutrisi (RCP).
 
 ## Arsitektur
@@ -35,7 +35,7 @@ iot-http-server/
         ├── api.js              # client Plan (base /api)
         ├── components/         # komponen Plan
         ├── utils/status.js     # helper Plan
-        └── features/iot/       # dashboard IoT (migrasi dari index.html + trend.html)
+        └── features/iot/       # dashboard IoT (sensor hidroponik + listrik PZEM-004T)
 ```
 
 ### Service (docker compose)
@@ -61,6 +61,8 @@ Buka **http://localhost:5005**
 
 - `/monitoring` — dashboard IoT (default, redirect dari `/`)
 - `/monitoring/trend/<sensor>` — grafik tren 1 sensor
+- `/listrik` — dashboard listrik (PZEM-004T) + estimasi biaya
+- `/listrik/trend/<metric>` — grafik tren 1 metrik listrik
 - `/plan` — dashboard plan tanam; sub-tab `/plan/history`, `/plan/stats`, `/plan/catalog`
 
 Perintah lain:
@@ -85,7 +87,7 @@ docker compose down          # hentikan
 `web/nginx.conf` memisah API berdasarkan prefix path:
 
 - `/terima-sensor` → `nodered:1880` (ingest sensor)
-- `/api/sensor-data`, `/api/pompa/`, `/api/interval/`, `/api/autodosing/`, `/api/relay/`, `/api/device/` → `iot-api:3000`
+- `/api/sensor-data`, `/api/pompa/`, `/api/interval/`, `/api/autodosing/`, `/api/relay/`, `/api/listrik/`, `/api/device/` → `iot-api:3000`
 - `/api/` (sisanya), `/uploads/` → `hidro-backend:5000`
 - `/` → SPA fallback (react-router)
 
@@ -97,12 +99,13 @@ docker compose down          # hentikan
 
 | Method | Endpoint | Keterangan |
 |---|---|---|
-| GET | `/api/sensor-data?filter=...` | Data sensor; filter: `realtime, 12hour, 1day, 1week, 2week, 1month, 3month, 6month` |
+| GET | `/api/sensor-data?filter=...&domain=listrik` | Data sensor (hidroponik + listrik PZEM-004T); filter: `realtime, 12hour, 1day, 1week, 2week, 1month, 3month, 6month`; `domain=listrik` menyertakan baris listrik-only |
 | POST | `/api/pompa/kontrol` | `{ durasi }` → enqueue (pompa AB Mix) |
 | POST | `/api/interval/kontrol` | `{ intervalDetik }` → enqueue |
 | POST | `/api/autodosing/kontrol` | `{ targetTds, volumeAir, konstantaPupuk }` → enqueue |
 | POST | `/api/relay/kontrol` | `{ idRelay, status: 'ON'|'OFF' }` → enqueue |
 | GET | `/api/relay/status` | `{ success, data: { relay_1..4 } }` |
+| POST | `/api/listrik/ingest` | `{ tegangan, arus, daya, energi, frekuensi, power_factor }` → tulis langsung ke InfluxDB (butuh `X-Device-Token`) |
 | GET | `/api/device/commands` | Perangkat: perintah pending (butuh `X-Device-Token`) |
 | POST | `/api/device/commands/:id/ack` | Perangkat: hapus perintah (butuh `X-Device-Token`) |
 
@@ -161,6 +164,7 @@ gram = (targetPpm - ppmAirAwal) * volumeAir / 1000 * konstanta
 - **Gambar**: JPG/PNG/WEBP, maks 5MB (`client_max_body_size 6m` + multer 5MB), maks 5/batch; disajikan via `/uploads/<file>`.
 - Migrasi DB bersifat **aditif**; data lama tetap utuh.
 - **Dua chart library**: recharts (halaman Plan), chart.js (halaman IoT) — tidak dicampur satu halaman.
+- **Listrik (PZEM-004T)**: field `tegangan, arus, daya, energi, frekuensi, power_factor` ditulis ke `_measurement` sama (`hidroponik_sensor`) lewat `POST /api/listrik/ingest` di `iot-api` (langsung ke InfluxDB, **tidak** lewat Node-RED). Firmware NodeMCU mengirim data listrik terpisah dari payload sensor hidroponik. `energi` bersifat kumulatif — pemakaian periode dihitung dari selisihnya. Tarif biaya (Rp/kWh) diatur di UI dan disimpan di `localStorage`.
 - **Kredensial hardcode** di `iot-api/server.js` (token InfluxDB) dan `note.txt` (dapat dioverride lewat env `INFLUXDB_TOKEN`/`INFLUXDB_URL`). Sebaiknya dipindah penuh ke `.env` di task terpisah.
 - **Antrean perintah in-memory**: perintah yang belum di-ACK hilang saat `iot-api` restart. Pindah ke SQLite bila perlu durabilitas.
 - **HTTPS ESP32**: firmware memakai `setInsecure()` — tidak memvalidasi sertifikat. Cukup untuk sekarang; sebaiknya pin sertifikat/root CA.

@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { InfluxDB } = require('@influxdata/influxdb-client');
+const { InfluxDB, Point } = require('@influxdata/influxdb-client');
 
 const app = express();
 const port = 3000;
@@ -12,6 +12,7 @@ const url = process.env.INFLUXDB_URL || 'http://influxdb:8086';
 const client = new InfluxDB({ url, token });
 const org = 'hidroponik';
 const bucket = 'sensor_data';
+const measurement = 'hidroponik_sensor';
 
 // --- TOKEN PERANGKAT (X-Device-Token) ---
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN || '';
@@ -49,6 +50,12 @@ function isPositiveNumber(v) {
     return Number.isFinite(n) && n > 0;
 }
 
+// Angka finite (boleh 0). Dipakai field listrik (arus/energi bisa 0).
+function isFiniteNumber(v) {
+    if (v === null || v === undefined || v === '') return false;
+    return Number.isFinite(Number(v));
+}
+
 // --- MIDDLEWARE ---
 app.use(cors());
 app.use(express.json());
@@ -75,9 +82,12 @@ app.get('/', (req, res) => {
 app.get('/api/sensor-data', async (req, res) => {
     const queryApi = client.getQueryApi(org);
     const filter = req.query.filter || 'realtime';
+    // domain=listrik -> ikut sertakan baris yang hanya berisi data listrik (PZEM).
+    // Tanpa itu, hanya baris dengan data hidroponik yang dikembalikan agar
+    // dashboard Monitoring lama tidak kemasukan baris listrik.
+    const includeListrik = req.query.domain === 'listrik';
     
     let rangeQuery = '-6h';
-    let aggregateQuery = ''; // Menampung query agregasi/downsampling
     // Batasi 40 titik TERAKHIR per _field. Harus SEBELUM pivot: sesudah pivot
     // _field sudah lebur jadi kolom, jadi tail/limit tak bisa grup per field
     // (itu penyebab bug realtime kosong sebelumnya).
@@ -91,35 +101,52 @@ app.get('/api/sensor-data', async (req, res) => {
         |> sort(columns: ["_time"], desc: false)`;
 
     // Konfigurasi dinamis rentang waktu dan downsampling.
+    // `energi` bersifat kumulatif, jadi TIDAK boleh dirata-rata (mean akan
+    // merusak nilai kWh dan differensinya). Field lain di-downsample dengan mean.
+    let windowEvery = '';
     if (filter === '12hour') { 
         rangeQuery = '-12h';
-        aggregateQuery = '|> aggregateWindow(every: 5m, fn: mean, createEmpty: false)';
+        windowEvery = '5m';
     } else if (filter === '1day') {
         rangeQuery = '-24h';
-        aggregateQuery = '|> aggregateWindow(every: 15m, fn: mean, createEmpty: false)';
+        windowEvery = '15m';
     } else if (filter === '1week') {
         rangeQuery = '-7d';
-        aggregateQuery = '|> aggregateWindow(every: 1h, fn: mean, createEmpty: false)';
+        windowEvery = '1h';
     } else if (filter === '2week') {
         rangeQuery = '-14d';
-        aggregateQuery = '|> aggregateWindow(every: 2h, fn: mean, createEmpty: false)';
+        windowEvery = '2h';
     } else if (filter === '1month') {
         rangeQuery = '-30d';
-        aggregateQuery = '|> aggregateWindow(every: 6h, fn: mean, createEmpty: false)';
+        windowEvery = '6h';
     } else if (filter === '3month') {
         rangeQuery = '-90d';
-        aggregateQuery = '|> aggregateWindow(every: 12h, fn: mean, createEmpty: false)';
+        windowEvery = '12h';
     } else if (filter === '6month') {
         rangeQuery = '-180d';
-        aggregateQuery = '|> aggregateWindow(every: 24h, fn: mean, createEmpty: false)';
+        windowEvery = '24h';
     }
 
-    // Agregasi (jika ada) dijalankan sebelum pivot.
+    // Agregasi (jika ada) dijalankan sebelum pivot. Dua aliran digabung lewat
+    // union(tables: [...]): `union` harus jadi call level-atas TANPA pipe input,
+    // jadi kedua aliran ditulis penuh di dalam array (bukan `... |> union(...)`).
+    // - field non-energi: aggregateWindow(mean) sesuai jendela
+    // - field energi: aggregateWindow(last) agar nilai kumulatif utuh
+    const meanAgg = windowEvery ? `|> aggregateWindow(every: ${windowEvery}, fn: mean, createEmpty: false)` : '';
+    const lastAgg = windowEvery ? `|> aggregateWindow(every: ${windowEvery}, fn: last, createEmpty: false)` : '';
     const fluxQuery = `
-      from(bucket: "${bucket}")
-        |> range(start: ${rangeQuery})
-        |> filter(fn: (r) => r["_measurement"] == "hidroponik_sensor")
-        ${aggregateQuery}
+      union(tables: [
+        from(bucket: "${bucket}")
+          |> range(start: ${rangeQuery})
+          |> filter(fn: (r) => r["_measurement"] == "hidroponik_sensor")
+          |> filter(fn: (r) => r["_field"] != "energi")
+          ${meanAgg},
+        from(bucket: "${bucket}")
+          |> range(start: ${rangeQuery})
+          |> filter(fn: (r) => r["_measurement"] == "hidroponik_sensor")
+          |> filter(fn: (r) => r["_field"] == "energi")
+          ${lastAgg}
+      ])
         ${tailPerFieldQuery}
         |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
     `;
@@ -137,7 +164,23 @@ app.get('/api/sensor-data', async (req, res) => {
                 next(row, tableMeta) {
                     const obj = tableMeta.toObject(row);
                     
-                    if (obj.suhu_udara > 0 || obj.kelembapan_udara > 0 || obj.kadar_tds > 0 || obj.suhu_air > 0) {
+                    // Baris lolos bila punya data hidroponik, atau bila diminta
+                    // domain=listrik dan baris punya data listrik (PZEM-004T).
+                    // domain=listrik HANYA mengembalikan baris listrik agar
+                    // dashboard Listrik tidak menerima baris hidroponik (yang
+                    // field PZEM-nya null dan bisa mengacaukan "data terbaru").
+                    // Semua field dicek `!= null` (pivot mengembalikan kolom absen
+                    // sebagai null). Hidroponik tak bisa 0 valid, tapi cek null lebih
+                    // aman daripada `> 0` agar baris yang hanya berisi satu field
+                    // tetap tidak terbuang (mis. hanya pH/UV, atau hanya frekuensi/PF).
+                    const adaHidroponik =
+                        obj.suhu_udara != null || obj.kelembapan_udara != null ||
+                        obj.kadar_tds != null || obj.kadar_ph != null ||
+                        obj.intensitas_uv != null || obj.suhu_air != null;
+                    const adaListrik =
+                        obj.tegangan != null || obj.arus != null || obj.daya != null ||
+                        obj.energi != null || obj.frekuensi != null || obj.power_factor != null;
+                    if (includeListrik ? adaListrik : adaHidroponik) {
                         dataSensor.push({
                             waktu: obj._time,
                             // Atur jumlah desimal sesuai kebutuhan sensor
@@ -146,7 +189,14 @@ app.get('/api/sensor-data', async (req, res) => {
                             kadar_tds: bulatkan(obj.kadar_tds, 0),           // Tanpa desimal (contoh: 1046)
                             kadar_ph: bulatkan(obj.kadar_ph, 2),             // 2 desimal (contoh: 6.50)
                             intensitas_uv: bulatkan(obj.intensitas_uv, 0),   // Tanpa desimal
-                            suhu_air: bulatkan(obj.suhu_air, 1)              // 1 desimal (contoh: 26.6)
+                            suhu_air: bulatkan(obj.suhu_air, 1),             // 1 desimal (contoh: 26.6)
+                            // PZEM-004T (listrik)
+                            tegangan: bulatkan(obj.tegangan, 1),             // V, 1 desimal (contoh: 220.5)
+                            arus: bulatkan(obj.arus, 2),                     // A, 2 desimal (contoh: 1.23)
+                            daya: bulatkan(obj.daya, 1),                     // W, 1 desimal (contoh: 271.2)
+                            energi: bulatkan(obj.energi, 3),                 // kWh, 3 desimal (kumulatif)
+                            frekuensi: bulatkan(obj.frekuensi, 1),           // Hz, 1 desimal (contoh: 50.0)
+                            power_factor: bulatkan(obj.power_factor, 2)      // PF, 2 desimal (contoh: 0.95)
                         });
                     }
                 },
@@ -334,6 +384,65 @@ app.post('/api/device/relay-status', deviceAuth, (req, res) => {
     relayState = next;
     console.log(`[RELAY] Status diperbarui dari perangkat: ${JSON.stringify(relayState)}`);
     res.json({ success: true, data: relayState });
+});
+
+// 11. Route Perangkat: ingest data listrik PZEM-004T langsung ke InfluxDB.
+// Jalur ini TIDAK lewat Node-RED, sehingga data listrik tetap masuk meski flow
+// Node-RED belum diperbarui. Ditulis ke `_measurement` yang sama
+// (hidroponik_sensor) agar dashboard Listrik (/api/sensor-data?domain=listrik)
+// langsung membacanya. Body: 6 field listrik, boleh dibungkus { object: {...} }.
+const PZEM_FIELDS = [
+    'tegangan',      // V
+    'arus',          // A
+    'daya',          // W
+    'energi',        // kWh (kumulatif)
+    'frekuensi',     // Hz
+    'power_factor',  // PF
+];
+
+// Rentang plausibel tiap field listrik: [min, max]. Nilai di luar ini ditolak
+// agar sampel rusak (negatif / mustahil) tidak tersimpan & merusak delta energi.
+const PZEM_RANGES = {
+    tegangan: [0, 300],        // V
+    arus: [0, 100],            // A
+    daya: [0, 30000],          // W
+    energi: [0, 1e7],          // kWh (kumulatif)
+    frekuensi: [0, 100],       // Hz
+    power_factor: [0, 1],      // PF
+};
+
+app.post('/api/listrik/ingest', deviceAuth, async (req, res) => {
+    try {
+        const raw = (req.body && req.body.object) ? req.body.object : (req.body || {});
+
+        const point = new Point(measurement);
+        let fields = 0;
+        for (const key of PZEM_FIELDS) {
+            if (!isFiniteNumber(raw[key])) continue;
+            const n = Number(raw[key]);
+            const [min, max] = PZEM_RANGES[key];
+            if (n < min || n > max) continue; // buang nilai di luar rentang plausibel
+            point.floatField(key, n);
+            fields++;
+        }
+
+        if (fields === 0) {
+            return res.status(400).json({ success: false, message: 'Tidak ada field listrik valid yang dikirim.' });
+        }
+
+        const writeApi = client.getWriteApi(org, bucket, 'ns');
+        try {
+            writeApi.writePoint(point);
+            await writeApi.flush();
+        } finally {
+            await writeApi.close();
+        }
+
+        res.json({ success: true, fields });
+    } catch (error) {
+        console.error('Error Ingest Listrik:', error.message);
+        res.status(500).json({ success: false, message: 'Terjadi kesalahan internal server.' });
+    }
 });
 
 // --- JALANKAN SERVER ---

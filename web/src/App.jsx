@@ -13,6 +13,8 @@ import CatalogPage from './components/CatalogPage.jsx'
 import TankPanel from './components/TankPanel.jsx'
 import MonitoringPage from './features/iot/MonitoringPage.jsx'
 import TrendPage from './features/iot/TrendPage.jsx'
+import ListrikPage from './features/iot/ListrikPage.jsx'
+import ListrikTrendPage from './features/iot/ListrikTrendPage.jsx'
 
 const EMPTY_MODAL = { open: false, tableNumber: 1, pipeNumber: 1 }
 
@@ -189,12 +191,16 @@ function PlanLayout() {
   )
 }
 
-// Shell app: header top-level + routing Monitoring/Plan.
+// Shell app: header top-level + routing Monitoring/Listrik/Plan.
 export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
 
-  const inIot = location.pathname.startsWith('/monitoring')
+  const SECTIONS = [
+    { key: 'monitoring', label: 'Monitoring', to: '/monitoring' },
+    { key: 'listrik', label: 'Listrik', to: '/listrik' },
+    { key: 'plan', label: 'Plan', to: '/plan' },
+  ]
 
   return (
     <div className="min-h-screen">
@@ -202,11 +208,8 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4 flex-wrap">
           <h1 className="text-lg font-bold text-text-hi">Hidroponik</h1>
           <nav className="flex gap-1.5">
-            {[
-              { key: 'monitoring', label: 'Monitoring', to: '/monitoring' },
-              { key: 'plan', label: 'Plan', to: '/plan' },
-            ].map((s) => {
-              const active = s.key === 'monitoring' ? inIot : !inIot
+            {SECTIONS.map((s) => {
+              const active = location.pathname.startsWith(s.to)
               return (
                 <button
                   key={s.key}
@@ -234,6 +237,8 @@ export default function App() {
           <Route path="/" element={<Navigate to="/monitoring" replace />} />
           <Route path="/monitoring" element={<MonitoringPage />} />
           <Route path="/monitoring/trend/:sensor" element={<TrendPage />} />
+          <Route path="/listrik" element={<ListrikPage />} />
+          <Route path="/listrik/trend/:metric" element={<ListrikTrendPage />} />
           <Route path="/plan/*" element={<PlanLayout />} />
           <Route path="*" element={<Navigate to="/monitoring" replace />} />
         </Routes>
