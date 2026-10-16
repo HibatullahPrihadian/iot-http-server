@@ -73,7 +73,7 @@ export default function ListrikPage() {
     const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(TARIFF_STORAGE_KEY) : null
     return saved !== null ? saved : String(DEFAULT_TARIFF)
   })
-  const { data, loading, error } = useSensorData({ filter, domain: 'listrik' })
+  const { data, loading, error } = useSensorData({ filter, domain: 'listrik', pollMs: 1000 })
 
   const latest = data.length ? data[data.length - 1] : null
   const online = isOnline(latest?.waktu)

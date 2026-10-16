@@ -3,10 +3,10 @@ import { getSensorData, getPzemData, getRelayStatus } from './api.js'
 
 const POLL_MS = 5000
 
-// Polling data sensor + status relay tiap 5 detik (port dari index.html baris 578-585).
-// paused=window.location.href-true agar tidak fetch saat tab trend memakai hook sendiri.
+// Polling data sensor + status relay tiap POLL_MS (default 5 detik).
 // domain='listrik' -> pakai endpoint listrik (ikut sertakan baris data PZEM saja).
-export function useSensorData({ filter = 'realtime', enabled = true, domain = 'hidroponik' } = {}) {
+// pollMs -> override interval polling per pemakaian (mis. Listrik 1000 ms).
+export function useSensorData({ filter = 'realtime', enabled = true, domain = 'hidroponik', pollMs = POLL_MS } = {}) {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -32,11 +32,11 @@ export function useSensorData({ filter = 'realtime', enabled = true, domain = 'h
     if (!enabled) return undefined
     setLoading(true)
     fetchData(filter)
-    timer.current = setInterval(() => fetchData(filter), POLL_MS)
+    timer.current = setInterval(() => fetchData(filter), pollMs)
     return () => {
       if (timer.current) clearInterval(timer.current)
     }
-  }, [filter, enabled, fetchData])
+  }, [filter, enabled, fetchData, pollMs])
 
   return { data, loading, error }
 }

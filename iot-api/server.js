@@ -88,15 +88,18 @@ app.get('/api/sensor-data', async (req, res) => {
     const includeListrik = req.query.domain === 'listrik';
     
     let rangeQuery = '-6h';
-    // Batasi 40 titik TERAKHIR per _field. Harus SEBELUM pivot: sesudah pivot
+    // Batasi titik TERAKHIR per _field. Harus SEBELUM pivot: sesudah pivot
     // _field sudah lebur jadi kolom, jadi tail/limit tak bisa grup per field
     // (itu penyebab bug realtime kosong sebelumnya).
     // Urutan akhir dikembalikan ASC (naik) agar konsisten dengan kontrak lama:
     // UI mengambil titik terbaru di data[data.length-1].
+    // Listrik dikirim 1Hz -> jendela lebih lebar (120 titik ~ 2 menit) agar
+    // chart tidak cuma ~40 detik; hidroponik tetap 40.
+    const tailLimit = includeListrik ? 120 : 40;
     let tailPerFieldQuery = `
         |> sort(columns: ["_time"], desc: true)
         |> group(columns: ["_field"])
-        |> limit(n: 40)
+        |> limit(n: ${tailLimit})
         |> group()
         |> sort(columns: ["_time"], desc: false)`;
 
