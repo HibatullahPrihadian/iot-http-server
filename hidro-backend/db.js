@@ -267,8 +267,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_tank_reading_measured ON TankReading(measuredAt);
 `);
 
-// Backfill sekali: salin pengukuran batch AKTIF ke TankReading, gabungkan baris
-// identik (measuredAt + ppm + ph) agar input per pipa yang sama tidak jadi duplikat.
+// Backfill sekali: salin pengukuran batch AKTIF ke TankReading.
 // BatchReading lama TIDAK dihapus (arsip riwayat batch).
 {
   const MIGRATION_KEY = 'tankReadingMigrated';
@@ -279,11 +278,10 @@ db.exec(`
         const res = db
           .prepare(
             `INSERT INTO TankReading (ppm, ph, catatan, measuredAt)
-             SELECT r.ppm, r.ph, MAX(r.catatan), r.measuredAt
+             SELECT r.ppm, r.ph, r.catatan, r.measuredAt
              FROM BatchReading r
              JOIN PlantBatch b ON b.id = r.batchId
              WHERE b.archivedAt IS NULL
-             GROUP BY r.measuredAt, r.ppm, r.ph
              ORDER BY r.measuredAt`
           )
           .run();
@@ -296,6 +294,45 @@ db.exec(`
       console.log(`Migrasi: TankReading dari batch aktif (${info} baris).`);
     } catch (err) {
       console.error('Migrasi TankReading gagal:', err.message);
+    }
+  }
+}
+
+// Dedupe sekali-jalan: pengukuran per pipa yang dicatat pada waktu hampir sama
+// (<= 10 menit) dengan ppm & pH identik adalah 1 pengukuran tangki yang sama.
+// Menyisakan baris paling awal; baris lain dihapus.
+{
+  const DEDUPE_KEY = 'tankReadingDeduped';
+  const already = db.prepare('SELECT value FROM AppSetting WHERE key = ?').get(DEDUPE_KEY);
+  if (!already) {
+    try {
+      const info = db.transaction(() => {
+        const res = db
+          .prepare(
+            `WITH ordered AS (
+               SELECT id, ppm, ph, measuredAt,
+                 LAG(measuredAt) OVER (ORDER BY measuredAt, id) AS prevAt,
+                 LAG(ppm) OVER (ORDER BY measuredAt, id) AS prevPpm,
+                 LAG(ph) OVER (ORDER BY measuredAt, id) AS prevPh
+               FROM TankReading
+             )
+             DELETE FROM TankReading WHERE id IN (
+               SELECT id FROM ordered
+               WHERE prevAt IS NOT NULL
+                 AND ppm IS prevPpm AND ph IS prevPh
+                 AND (strftime('%s', measuredAt) - strftime('%s', prevAt)) <= 600
+             )`
+          )
+          .run();
+        db.prepare(
+          `INSERT INTO AppSetting (key, value) VALUES (?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+        ).run(DEDUPE_KEY, String(res.changes));
+        return res.changes;
+      })();
+      console.log(`Migrasi: dedupe TankReading (${info} baris duplikat dihapus).`);
+    } catch (err) {
+      console.error('Dedupe TankReading gagal:', err.message);
     }
   }
 }
