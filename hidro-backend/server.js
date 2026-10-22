@@ -60,8 +60,6 @@ function daysBetween(fromStr, toStr) {
 const PHASES = ['Semai', 'Pembesaran'];
 // Batas jumlah pembacaan yang dikembalikan agar payload tak membengkak.
 const MAX_READINGS = 500;
-// Ambang alert ppm: menyimpang >10% dari target.
-const PPM_TOLERANCE = 0.1;
 
 // Fase aktif batch berdasarkan perbandingan hari ini vs tanggal pindah.
 function activePhase(batch) {
@@ -152,6 +150,51 @@ function validateRecipePayload(body) {
       ppmAirDefault: air.value,
       volumeTangki: volTangki.value,
       catatan: typeof b.catatan === 'string' ? b.catatan.trim() || null : null,
+    },
+  };
+}
+
+// Validasi payload pengukuran nutrisi { ppm?, ph?, catatan? }.
+// Minimal salah satu ppm/pH harus diisi.
+function validateReadingPayload(body) {
+  const b = body || {};
+  const rawPpm = b.ppm;
+  const rawPh = b.ph;
+  const hasPpm = rawPpm !== null && rawPpm !== undefined && rawPpm !== '';
+  const hasPh = rawPh !== null && rawPh !== undefined && rawPh !== '';
+
+  if (!hasPpm && !hasPh) {
+    return { error: 'Minimal ppm atau pH harus diisi' };
+  }
+
+  let ppm = null;
+  let ph = null;
+  if (hasPpm) {
+    ppm = Number(rawPpm);
+    if (!Number.isInteger(ppm) || ppm < 0) {
+      return { error: 'ppm harus bilangan bulat >= 0' };
+    }
+  }
+  if (hasPh) {
+    ph = Number(rawPh);
+    if (!Number.isFinite(ph) || ph < 0 || ph > 14) {
+      return { error: 'ph harus angka 0-14' };
+    }
+  }
+
+  const catatan = b.catatan;
+  if (catatan !== null && catatan !== undefined && typeof catatan !== 'string') {
+    return { error: 'catatan harus string' };
+  }
+  if (typeof catatan === 'string' && catatan.length > MAX_NOTES) {
+    return { error: `catatan maksimal ${MAX_NOTES} karakter` };
+  }
+
+  return {
+    value: {
+      ppm,
+      ph,
+      catatan: typeof catatan === 'string' ? catatan.trim() || null : null,
     },
   };
 }
@@ -1114,7 +1157,8 @@ app.post('/api/batches/:id/dose', (req, res) => {
   }
 });
 
-// GET /api/batches/:id/readings -> daftar pengukuran (terbaru dulu) + resep fase aktif.
+// GET /api/batches/:id/readings -> LEGACY read-only: arsip pengukuran per batch
+// (sebelum pengukuran dipindah ke level tangki). Tidak dipakai UI lagi.
 app.get('/api/batches/:id/readings', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -1136,85 +1180,6 @@ app.get('/api/batches/:id/readings', (req, res) => {
       recipe: recipe || null,
       readings,
     });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// POST /api/batches/:id/readings -> tambah pengukuran { ppm?, ph?, catatan? }.
-app.post('/api/batches/:id/readings', (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id)) return res.status(400).json({ error: 'id tidak valid' });
-
-    const batch = db.prepare('SELECT * FROM PlantBatch WHERE id = ?').get(id);
-    if (!batch) return res.status(404).json({ error: 'Batch tidak ditemukan' });
-    if (batch.archivedAt) {
-      return res.status(409).json({ error: 'Batch sudah dipanen, tidak bisa menambah pengukuran' });
-    }
-
-    const rawPpm = req.body?.ppm;
-    const rawPh = req.body?.ph;
-    const hasPpm = rawPpm !== null && rawPpm !== undefined && rawPpm !== '';
-    const hasPh = rawPh !== null && rawPh !== undefined && rawPh !== '';
-    if (!hasPpm && !hasPh) {
-      return res.status(400).json({ error: 'Minimal ppm atau pH harus diisi' });
-    }
-
-    let ppm = null;
-    let ph = null;
-    if (hasPpm) {
-      ppm = Number(rawPpm);
-      if (!Number.isInteger(ppm) || ppm < 0) {
-        return res.status(400).json({ error: 'ppm harus bilangan bulat >= 0' });
-      }
-    }
-    if (hasPh) {
-      ph = Number(rawPh);
-      if (!Number.isFinite(ph) || ph < 0 || ph > 14) {
-        return res.status(400).json({ error: 'ph harus angka 0-14' });
-      }
-    }
-
-    const catatan = req.body?.catatan;
-    if (catatan !== null && catatan !== undefined && typeof catatan !== 'string') {
-      return res.status(400).json({ error: 'catatan harus string' });
-    }
-    if (typeof catatan === 'string' && catatan.length > MAX_NOTES) {
-      return res.status(400).json({ error: `catatan maksimal ${MAX_NOTES} karakter` });
-    }
-
-    const info = db
-      .prepare(
-        'INSERT INTO BatchReading (batchId, ppm, ph, catatan, measuredAt) VALUES (?, ?, ?, ?, ?)'
-      )
-      .run(id, ppm, ph, catatan ? catatan.trim() || null : null, nowISO());
-
-    const row = db.prepare('SELECT * FROM BatchReading WHERE id = ?').get(info.lastInsertRowid);
-    res.status(201).json(row);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// DELETE /api/batches/:id/readings/:readingId -> hapus 1 pengukuran.
-app.delete('/api/batches/:id/readings/:readingId', (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const readingId = Number(req.params.readingId);
-    if (!Number.isInteger(id) || !Number.isInteger(readingId)) {
-      return res.status(400).json({ error: 'id tidak valid' });
-    }
-
-    const reading = db
-      .prepare('SELECT id FROM BatchReading WHERE id = ? AND batchId = ?')
-      .get(readingId, id);
-    if (!reading) return res.status(404).json({ error: 'Pengukuran tidak ditemukan' });
-
-    db.prepare('DELETE FROM BatchReading WHERE id = ?').run(readingId);
-    res.json({ success: true });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -1280,86 +1245,6 @@ app.get('/api/stats/summary', (req, res) => {
       estimasiVsRealisasi,
       occupancy: { occupied, total: 18, ratio: occupied / 18 },
     });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// GET /api/stats/nutrition -> tren ppm/pH + daftar batch pembacaan terakhir di luar target.
-app.get('/api/stats/nutrition', (req, res) => {
-  try {
-    const batches = db
-      .prepare(
-        `SELECT b.*, c.name AS plantName
-         FROM PlantBatch b JOIN PlantCatalog c ON c.id = b.plantId
-         WHERE b.archivedAt IS NULL
-         ORDER BY b.tableNumber, b.pipeNumber`
-      )
-      .all();
-
-    const trend = [];
-    const outOfRange = [];
-
-    for (const batch of batches) {
-      const readings = db
-        .prepare(
-          `SELECT * FROM BatchReading WHERE batchId = ?
-           ORDER BY measuredAt ASC, id ASC LIMIT ?`
-        )
-        .all(batch.id, MAX_READINGS);
-
-      if (readings.length === 0) continue;
-
-      const phase = activePhase(batch);
-      const recipe = db
-        .prepare('SELECT * FROM PlantRecipe WHERE plantId = ? AND phase = ?')
-        .get(batch.plantId, phase);
-
-      trend.push({
-        batchId: batch.id,
-        plantName: batch.plantName,
-        tableNumber: batch.tableNumber,
-        pipeNumber: batch.pipeNumber,
-        phase,
-        readings: readings.map((r) => ({ measuredAt: r.measuredAt, ppm: r.ppm, ph: r.ph })),
-      });
-
-      const last = readings[readings.length - 1];
-      const reasons = [];
-      let level = 'ok';
-
-      if (recipe) {
-        if (
-          recipe.ppmTarget !== null &&
-          last.ppm !== null &&
-          Math.abs(last.ppm - recipe.ppmTarget) > recipe.ppmTarget * PPM_TOLERANCE
-        ) {
-          level = 'danger';
-          reasons.push(`ppm ${last.ppm} di luar ±10% dari target ${recipe.ppmTarget}`);
-        }
-        if (last.ph !== null && recipe.phMin !== null && recipe.phMax !== null) {
-          if (last.ph < recipe.phMin || last.ph > recipe.phMax) {
-            level = 'danger';
-            reasons.push(`pH ${last.ph} di luar rentang ${recipe.phMin}-${recipe.phMax}`);
-          }
-        }
-      }
-
-      if (level !== 'ok') {
-        outOfRange.push({
-          batchId: batch.id,
-          plantName: batch.plantName,
-          tableNumber: batch.tableNumber,
-          pipeNumber: batch.pipeNumber,
-          phase,
-          lastReading: last,
-          reasons,
-        });
-      }
-    }
-
-    res.json({ trend, outOfRange });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -1451,6 +1336,64 @@ app.post('/api/tank/dose', (req, res) => {
       volumeAir,
       konstanta: recipe.konstanta,
     });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/tank/readings -> pengukuran nutrisi LEVEL TANGKI (terbaru dulu) + resep aktif.
+app.get('/api/tank/readings', (req, res) => {
+  try {
+    const recipe = getActiveTankRecipe();
+    const readings = db
+      .prepare(
+        `SELECT * FROM TankReading
+         ORDER BY measuredAt DESC, id DESC LIMIT ?`
+      )
+      .all(MAX_READINGS);
+
+    res.json({ recipe: recipe || null, readings });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/tank/readings -> tambah pengukuran tangki { ppm?, ph?, catatan? }.
+app.post('/api/tank/readings', (req, res) => {
+  try {
+    const parsed = validateReadingPayload(req.body);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+
+    const { ppm, ph, catatan } = parsed.value;
+    const info = db
+      .prepare(
+        'INSERT INTO TankReading (ppm, ph, catatan, measuredAt) VALUES (?, ?, ?, ?)'
+      )
+      .run(ppm, ph, catatan, nowISO());
+
+    const row = db.prepare('SELECT * FROM TankReading WHERE id = ?').get(info.lastInsertRowid);
+    res.status(201).json(row);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/tank/readings/:readingId -> hapus 1 pengukuran tangki.
+app.delete('/api/tank/readings/:readingId', (req, res) => {
+  try {
+    const readingId = Number(req.params.readingId);
+    if (!Number.isInteger(readingId)) {
+      return res.status(400).json({ error: 'id tidak valid' });
+    }
+
+    const reading = db.prepare('SELECT id FROM TankReading WHERE id = ?').get(readingId);
+    if (!reading) return res.status(404).json({ error: 'Pengukuran tidak ditemukan' });
+
+    db.prepare('DELETE FROM TankReading WHERE id = ?').run(readingId);
+    res.json({ success: true });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });

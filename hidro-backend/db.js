@@ -254,6 +254,52 @@ db.exec(`
   );
 `);
 
+// Pengukuran nutrisi LEVEL TANGKI (satu tangki untuk 3 meja, bukan per pipa).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS TankReading (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ppm INTEGER,
+    ph REAL,
+    catatan TEXT,
+    measuredAt TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_tank_reading_measured ON TankReading(measuredAt);
+`);
+
+// Backfill sekali: salin pengukuran batch AKTIF ke TankReading, gabungkan baris
+// identik (measuredAt + ppm + ph) agar input per pipa yang sama tidak jadi duplikat.
+// BatchReading lama TIDAK dihapus (arsip riwayat batch).
+{
+  const MIGRATION_KEY = 'tankReadingMigrated';
+  const already = db.prepare('SELECT value FROM AppSetting WHERE key = ?').get(MIGRATION_KEY);
+  if (!already) {
+    try {
+      const info = db.transaction(() => {
+        const res = db
+          .prepare(
+            `INSERT INTO TankReading (ppm, ph, catatan, measuredAt)
+             SELECT r.ppm, r.ph, MAX(r.catatan), r.measuredAt
+             FROM BatchReading r
+             JOIN PlantBatch b ON b.id = r.batchId
+             WHERE b.archivedAt IS NULL
+             GROUP BY r.measuredAt, r.ppm, r.ph
+             ORDER BY r.measuredAt`
+          )
+          .run();
+        db.prepare(
+          `INSERT INTO AppSetting (key, value) VALUES (?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+        ).run(MIGRATION_KEY, String(res.changes));
+        return res.changes;
+      })();
+      console.log(`Migrasi: TankReading dari batch aktif (${info} baris).`);
+    } catch (err) {
+      console.error('Migrasi TankReading gagal:', err.message);
+    }
+  }
+}
+
 // Tebakan awal per tanaman; K = konstanta (ppm per gram/L), air = ppm air baku.
 const RECIPE_SEEDS = {
   Selada: {

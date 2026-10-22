@@ -1,5 +1,16 @@
 import { useEffect, useState } from 'react'
-import { get, post } from '../api.js'
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  ReferenceLine,
+  Legend,
+} from 'recharts'
+import { get, post, del } from '../api.js'
 import {
   nutritionAlert,
   formatPpm,
@@ -7,6 +18,19 @@ import {
   formatDateTime,
   formatRelativeTime,
 } from '../utils/status.js'
+
+const AXIS_TICK = { fill: '#aeaeb2', fontSize: 11 }
+const TOOLTIP_STYLE = {
+  contentStyle: {
+    background: 'rgba(28,28,30,0.95)',
+    border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: '12px',
+    color: '#f2f2f7',
+  },
+  labelStyle: { color: '#f2f2f7' },
+  itemStyle: { color: '#f2f2f7' },
+}
+const LEGEND_STYLE = { wrapperStyle: { color: '#aeaeb2', fontSize: 11 } }
 
 const ALERT_STYLE = {
   ok: 'bg-ios-green/10 border-ios-green/40 text-ios-green',
@@ -19,7 +43,8 @@ const INPUT =
   'placeholder:text-text-low focus:outline-none focus:border-ios-blue focus:ring-2 focus:ring-ios-blue/30'
 
 // Panel resep tangki (satu tangki global untuk 3 meja) yang tampil di atas Meja 3:
-// resep aktif, kalkulator dosis, dan pembacaan sensor IoT terakhir.
+// resep aktif, kalkulator dosis, pembacaan sensor IoT, dan pengukuran manual
+// ppm/pH level tangki (bukan per pipa).
 export default function TankPanel({ onGoCatalog }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -34,6 +59,13 @@ export default function TankPanel({ onGoCatalog }) {
   const [targetPpm, setTargetPpm] = useState('')
   const [dose, setDose] = useState(null)
   const [calcBusy, setCalcBusy] = useState(false)
+
+  // Pengukuran manual (level tangki).
+  const [readings, setReadings] = useState([])
+  const [ppmInput, setPpmInput] = useState('')
+  const [phInput, setPhInput] = useState('')
+  const [catatanInput, setCatatanInput] = useState('')
+  const [saveBusy, setSaveBusy] = useState(false)
 
   // Muat data tangki. Error sensor dipisah dari error panel.
   async function load() {
@@ -63,8 +95,19 @@ export default function TankPanel({ onGoCatalog }) {
     }
   }
 
+  // Pengukuran manual dipisah dari polling sensor agar tidak ikut tiap 30 detik.
+  async function loadReadings() {
+    try {
+      const data = await get('/tank/readings')
+      setReadings(data.readings || [])
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
   useEffect(() => {
     load()
+    loadReadings()
     // Poll ringan 30 detik; dibersihkan saat unmount.
     const timer = setInterval(() => {
       load()
@@ -91,7 +134,50 @@ export default function TankPanel({ onGoCatalog }) {
     }
   }
 
+  async function handleAddReading(e) {
+    e.preventDefault()
+    setError('')
+    setSaveBusy(true)
+    try {
+      const body = {}
+      if (ppmInput !== '') body.ppm = Number(ppmInput)
+      if (phInput !== '') body.ph = Number(phInput)
+      if (catatanInput.trim() !== '') body.catatan = catatanInput.trim()
+      await post('/tank/readings', body)
+      setPpmInput('')
+      setPhInput('')
+      setCatatanInput('')
+      await loadReadings()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaveBusy(false)
+    }
+  }
+
+  async function removeReading(readingId) {
+    setError('')
+    try {
+      await del(`/tank/readings/${readingId}`)
+      setReadings((prev) => prev.filter((r) => r.id !== readingId))
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
   const alert = nutritionAlert(sensor, recipe)
+
+  const latestReading = readings.length ? readings[0] : null
+  const readingAlert = nutritionAlert(latestReading, recipe)
+
+  // Grafik butuh data urut naik sesuai waktu.
+  const chartData = [...readings]
+    .reverse()
+    .map((r) => ({
+      label: formatDateTime(r.measuredAt),
+      ppm: r.ppm,
+      ph: r.ph,
+    }))
 
   return (
     <section className="glass-panel p-5">
@@ -109,7 +195,8 @@ export default function TankPanel({ onGoCatalog }) {
         )}
       </div>
       <p className="text-[11px] text-text-low mt-1">
-        Satu tangki untuk 3 meja. Nilai sensor adalah kondisi tangki total, bukan per pipa.
+        Satu tangki untuk 3 meja. Nilai sensor dan pengukuran manual adalah kondisi tangki
+        total, bukan per pipa.
       </p>
 
       {error && (
@@ -132,6 +219,10 @@ export default function TankPanel({ onGoCatalog }) {
               Pilih di tab Katalog &rarr;
             </button>
           )}
+          <p className="mt-2">
+            Pengukuran tetap bisa dicatat, tetapi target ppm/pH untuk peringatan belum
+            tersedia.
+          </p>
         </div>
       ) : (
         <div className="mt-3 space-y-4">
@@ -173,7 +264,11 @@ export default function TankPanel({ onGoCatalog }) {
               {recipe.catatan}
             </p>
           )}
+        </div>
+      )}
 
+      {!loading && (
+        <div className="mt-4 space-y-4">
           {/* Pembacaan sensor */}
           <div>
             <div className="flex items-center justify-between mb-1">
@@ -202,7 +297,7 @@ export default function TankPanel({ onGoCatalog }) {
               </div>
             ) : sensor ? (
               <div className={`rounded-lg border px-3 py-2 text-xs ${ALERT_STYLE[alert.level]}`}>
-                <span className="font-semibold">Terakhir:</span> ppm {formatPpm(sensor.ppm)} &middot;
+                <span className="font-semibold">Terakhir:</span> {formatPpm(sensor.ppm)} &middot;
                 pH {formatPh(sensor.ph)}
                 {sensor.waktu && (
                   <>
@@ -264,7 +359,7 @@ export default function TankPanel({ onGoCatalog }) {
             </div>
             <button
               type="submit"
-              disabled={calcBusy}
+              disabled={calcBusy || !recipe}
               className="btn-ios w-full bg-ios-blue hover:shadow-glow-blue disabled:opacity-60
                 text-white text-xs py-2"
             >
@@ -278,6 +373,160 @@ export default function TankPanel({ onGoCatalog }) {
               </div>
             )}
           </form>
+
+          <div className="border-t border-white/10 pt-3 space-y-3">
+            <p className="text-xs font-semibold text-text-mid">Pengukuran Manual Tangki</p>
+
+            {/* Pembacaan manual terakhir + alert */}
+            <div className={`rounded-lg border px-3 py-2 text-xs ${ALERT_STYLE[readingAlert.level]}`}>
+              {latestReading ? (
+                <>
+                  <span className="font-semibold">Terakhir:</span>{' '}
+                  {formatPpm(latestReading.ppm)} &middot; pH {formatPh(latestReading.ph)} &middot;{' '}
+                  {formatDateTime(latestReading.measuredAt)}
+                  {readingAlert.reasons.length > 0 && (
+                    <ul className="mt-1 list-disc list-inside">
+                      {readingAlert.reasons.map((r) => (
+                        <li key={r}>{r}</li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              ) : (
+                <span>Belum ada pengukuran.</span>
+              )}
+            </div>
+
+            {/* Grafik tren pengukuran */}
+            {chartData.length > 0 && (
+              <div className="rounded-lg bg-black/20 border border-white/10 p-2">
+                <ResponsiveContainer width="100%" height={160}>
+                  <LineChart data={chartData} margin={{ top: 6, right: 8, left: -18, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                    <XAxis dataKey="label" tick={AXIS_TICK} hide />
+                    <YAxis
+                      yAxisId="ppm"
+                      tick={AXIS_TICK}
+                      axisLine={{ stroke: 'rgba(255,255,255,0.1)' }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      yAxisId="ph"
+                      orientation="right"
+                      domain={[4, 8]}
+                      tick={AXIS_TICK}
+                      axisLine={{ stroke: 'rgba(255,255,255,0.1)' }}
+                      tickLine={false}
+                    />
+                    <Tooltip {...TOOLTIP_STYLE} />
+                    <Legend {...LEGEND_STYLE} />
+                    {recipe && recipe.ppmTarget !== null && (
+                      <ReferenceLine
+                        yAxisId="ppm"
+                        y={recipe.ppmTarget}
+                        stroke="#ff9f0a"
+                        strokeDasharray="4 4"
+                      />
+                    )}
+                    <Line
+                      yAxisId="ppm"
+                      type="monotone"
+                      dataKey="ppm"
+                      name="ppm"
+                      stroke="#0a84ff"
+                      strokeWidth={2}
+                      connectNulls
+                      dot={{ r: 2 }}
+                    />
+                    <Line
+                      yAxisId="ph"
+                      type="monotone"
+                      dataKey="ph"
+                      name="pH"
+                      stroke="#30d158"
+                      strokeWidth={2}
+                      connectNulls
+                      dot={{ r: 2 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            {/* Form tambah pengukuran */}
+            <form onSubmit={handleAddReading} className="space-y-2">
+              <p className="text-xs font-semibold text-text-mid">
+                Tambah Pengukuran{' '}
+                <span className="text-text-low font-normal">(berlaku untuk tangki)</span>
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="text-[11px] text-text-low">ppm</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={ppmInput}
+                    onChange={(e) => setPpmInput(e.target.value)}
+                    placeholder="mis. 840"
+                    className={INPUT}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[11px] text-text-low">pH</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="14"
+                    step="0.1"
+                    value={phInput}
+                    onChange={(e) => setPhInput(e.target.value)}
+                    placeholder="mis. 6.0"
+                    className={INPUT}
+                  />
+                </label>
+              </div>
+              <input
+                value={catatanInput}
+                onChange={(e) => setCatatanInput(e.target.value)}
+                placeholder="Catatan (opsional)"
+                className={INPUT}
+              />
+              <button
+                type="submit"
+                disabled={saveBusy || (ppmInput === '' && phInput === '')}
+                className="btn-ios w-full bg-ios-green hover:shadow-glow-green disabled:opacity-60
+                  text-white text-xs py-2"
+              >
+                {saveBusy ? 'Menyimpan...' : 'Simpan Pengukuran'}
+              </button>
+            </form>
+
+            {/* Riwayat pengukuran */}
+            {readings.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-text-mid">Riwayat ({readings.length})</p>
+                <ul className="divide-y divide-white/10 rounded-lg bg-black/20 border border-white/10">
+                  {readings.map((r) => (
+                    <li key={r.id} className="flex items-center justify-between px-3 py-2 text-xs">
+                      <div className="text-text-dim">
+                        {formatDateTime(r.measuredAt)}
+                        {' \u00b7 '}
+                        {formatPpm(r.ppm)} &middot; pH {formatPh(r.ph)}
+                        {r.catatan && <span className="text-text-low"> &middot; {r.catatan}</span>}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeReading(r.id)}
+                        className="text-ios-red hover:underline ml-2 shrink-0"
+                      >
+                        Hapus
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </section>

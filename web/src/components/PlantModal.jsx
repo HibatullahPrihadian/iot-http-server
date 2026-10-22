@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { post, put, del } from '../api.js'
 import { countdownLabel, formatDate, todayInput, daysBetween } from '../utils/status.js'
 import NotesImages from './NotesImages.jsx'
-import NutritionPanel from './NutritionPanel.jsx'
 import ConfirmDialog from './ConfirmDialog.jsx'
 
 // Modal: form tanam baru (pipa kosong Meja 3) atau detail + edit + panen/pindah.
@@ -370,8 +369,6 @@ export default function PlantModal({
               </div>
 
               <NotesImages batch={batch} onChanged={onSaved} />
-
-              <NutritionPanel batch={batch} archived={Boolean(batch.archivedAt)} />
 
               <button
                 type="button"

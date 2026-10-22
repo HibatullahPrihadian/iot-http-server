@@ -10,9 +10,10 @@ import {
   Tooltip,
   CartesianGrid,
   Legend,
+  ReferenceLine,
 } from 'recharts'
 import { get } from '../api.js'
-import { formatPpm, formatPh } from '../utils/status.js'
+import { nutritionAlert, formatPpm, formatPh, formatDateTime } from '../utils/status.js'
 
 // Halaman statistik: panen per bulan, per tanaman, estimasi vs realisasi, keterisian.
 const AXIS_TICK = { fill: '#aeaeb2', fontSize: 12 }
@@ -32,8 +33,8 @@ export default function StatsPage() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [nutrition, setNutrition] = useState(null)
-  const [selectedBatch, setSelectedBatch] = useState('')
+  const [tankReadings, setTankReadings] = useState([])
+  const [tankRecipe, setTankRecipe] = useState(null)
 
   useEffect(() => {
     let cancelled = false
@@ -55,11 +56,11 @@ export default function StatsPage() {
 
   useEffect(() => {
     let cancelled = false
-    get('/stats/nutrition')
+    get('/tank/readings')
       .then((d) => {
         if (cancelled) return
-        setNutrition(d)
-        if (d.trend && d.trend.length) setSelectedBatch(String(d.trend[0].batchId))
+        setTankRecipe(d.recipe || null)
+        setTankReadings(d.readings || [])
       })
       .catch(() => {})
     return () => {
@@ -79,16 +80,16 @@ export default function StatsPage() {
   const occupancy = data.occupancy
   const pct = Math.round(occupancy.ratio * 100)
 
-  const trend = nutrition?.trend || []
-  const outOfRange = nutrition?.outOfRange || []
-  const activeTrend = trend.find((t) => String(t.batchId) === selectedBatch) || null
-  const chartData = activeTrend
-    ? activeTrend.readings.map((r) => ({
-        label: String(r.measuredAt).slice(5, 16).replace('T', ' '),
-        ppm: r.ppm,
-        ph: r.ph,
-      }))
-    : []
+  const latestReading = tankReadings.length ? tankReadings[0] : null
+  const tankAlert = nutritionAlert(latestReading, tankRecipe)
+  // Grafik butuh data urut naik sesuai waktu.
+  const chartData = [...tankReadings]
+    .reverse()
+    .map((r) => ({
+      label: formatDateTime(r.measuredAt),
+      ppm: r.ppm,
+      ph: r.ph,
+    }))
 
   return (
     <div className="space-y-6">
@@ -99,25 +100,23 @@ export default function StatsPage() {
       </div>
 
       <Card title="Nutrisi (RCP)">
-        {trend.length === 0 ? (
+        {tankReadings.length === 0 ? (
           <p className="text-sm text-text-low">Belum ada pengukuran nutrisi.</p>
         ) : (
           <div className="space-y-4">
-            <label className="block">
-              <span className="text-xs text-text-low">Pilih batch</span>
-              <select
-                value={selectedBatch}
-                onChange={(e) => setSelectedBatch(e.target.value)}
-                className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 text-sm
-                  text-text-body focus:outline-none focus:border-ios-blue focus:ring-2 focus:ring-ios-blue/30"
-              >
-                {trend.map((t) => (
-                  <option key={t.batchId} value={t.batchId} className="bg-neutral-900 text-text-body">
-                    {t.plantName} — Meja {t.tableNumber} Pipa {t.pipeNumber} ({t.phase})
-                  </option>
-                ))}
-              </select>
-            </label>
+            <p className="text-xs text-text-low">
+              Satu tangki untuk 3 meja &mdash; pembacaan berikut adalah kondisi tangki total,
+              bukan per pipa.
+              {tankRecipe && (
+                <>
+                  {' '}Target: ppm {formatPpm(tankRecipe.ppmTarget)}, pH{' '}
+                  {tankRecipe.phMin !== null && tankRecipe.phMax !== null
+                    ? `${tankRecipe.phMin}-${tankRecipe.phMax}`
+                    : '-'}
+                  .
+                </>
+              )}
+            </p>
 
             {chartData.length > 0 && (
               <ResponsiveContainer width="100%" height={260}>
@@ -135,6 +134,14 @@ export default function StatsPage() {
                   />
                   <Tooltip {...TOOLTIP_STYLE} />
                   <Legend {...LEGEND_STYLE} />
+                  {tankRecipe && tankRecipe.ppmTarget !== null && (
+                    <ReferenceLine
+                      yAxisId="ppm"
+                      y={tankRecipe.ppmTarget}
+                      stroke="#ff9f0a"
+                      strokeDasharray="4 4"
+                    />
+                  )}
                   <Line yAxisId="ppm" type="monotone" dataKey="ppm" name="ppm" stroke="#0a84ff" strokeWidth={2} connectNulls dot={{ r: 3 }} />
                   <Line yAxisId="ph" type="monotone" dataKey="ph" name="pH" stroke="#30d158" strokeWidth={2} connectNulls dot={{ r: 3 }} />
                 </LineChart>
@@ -142,26 +149,21 @@ export default function StatsPage() {
             )}
 
             <div>
-              <p className="text-sm font-semibold text-mid mb-2">
-                Batch di luar target ({outOfRange.length})
-              </p>
-              {outOfRange.length === 0 ? (
-                <p className="text-sm text-text-low">Semua pembacaan dalam target.</p>
+              <p className="text-sm font-semibold text-mid mb-2">Tangki di luar target</p>
+              {tankAlert.reasons.length === 0 ? (
+                <p className="text-sm text-text-low">
+                  {tankRecipe
+                    ? 'Pembacaan terakhir dalam target.'
+                    : 'Resep tangki belum diset — target ppm/pH belum bisa diperiksa.'}
+                </p>
               ) : (
-                <ul className="space-y-1">
-                  {outOfRange.map((o) => (
-                    <li
-                      key={o.batchId}
-                      className="rounded-lg bg-ios-red/10 border border-ios-red/40 text-ios-red text-xs px-3 py-2"
-                    >
-                      <span className="font-semibold">
-                        {o.plantName} — Meja {o.tableNumber} Pipa {o.pipeNumber}
-                      </span>{' '}
-                      (ppm {formatPpm(o.lastReading.ppm)}, pH {formatPh(o.lastReading.ph)}):{' '}
-                      {o.reasons.join('; ')}
-                    </li>
-                  ))}
-                </ul>
+                <div className="rounded-lg bg-ios-red/10 border border-ios-red/40 text-ios-red text-xs px-3 py-2">
+                  <span className="font-semibold">
+                    Terakhir {formatDateTime(latestReading.measuredAt)} (ppm{' '}
+                    {formatPpm(latestReading.ppm)}, pH {formatPh(latestReading.ph)}):
+                  </span>{' '}
+                  {tankAlert.reasons.join('; ')}
+                </div>
               )}
             </div>
           </div>

@@ -146,10 +146,10 @@ Detail kontrak HTTP + token ada di [`dokumentasi.md`](dokumentasi.md).
 | PUT | `/api/catalog/:id/recipes/:phase` | Upsert resep 1 fase |
 | GET | `/api/batches/:id/recipe` | Resep fase aktif batch: `{ phase, hasRecipe, recipe }` |
 | POST | `/api/batches/:id/dose` | Hitung dosis: `{ volumeAir, ppmAirAwal?, targetPpm? }` -> `{ gramA, gramB, ... }` |
-| GET | `/api/batches/:id/readings` | Pengukuran (terbaru dulu, maks 500) + `phase` + `recipe` |
-| POST | `/api/batches/:id/readings` | Tambah pengukuran: `{ ppm?, ph?, catatan? }` |
-| DELETE | `/api/batches/:id/readings/:readingId` | Hapus pengukuran |
-| GET | `/api/stats/nutrition` | `{ trend, outOfRange }` |
+| GET | `/api/batches/:id/readings` | **Legacy read-only**: arsip pengukuran per batch (tidak dipakai UI) |
+| GET | `/api/tank/readings` | Pengukuran tangki (terbaru dulu, maks 500) + resep tangki aktif |
+| POST | `/api/tank/readings` | Tambah pengukuran tangki: `{ ppm?, ph?, catatan? }` |
+| DELETE | `/api/tank/readings/:readingId` | Hapus pengukuran tangki |
 
 Rumus kalkulator dosis (perkiraan, bukan rekomendasi agronomis):
 
@@ -163,6 +163,8 @@ gram = (targetPpm - ppmAirAwal) * volumeAir / 1000 * konstanta
 - **Panen = arsip** (`archivedAt`), bukan hapus; pipa jadi kosong dan bisa ditanam ulang (partial unique index `WHERE archivedAt IS NULL`).
 - **Gambar**: JPG/PNG/WEBP, maks 5MB (`client_max_body_size 6m` + multer 5MB), maks 5/batch; disajikan via `/uploads/<file>`.
 - Migrasi DB bersifat **aditif**; data lama tetap utuh.
+- **Pengukuran ppm/pH bersifat per tangki** (`TankReading`), bukan per pipa: satu tangki dipakai 3 meja, jadi input cukup sekali di panel Resep Tangki. Pengukuran lama per batch disalin sekali ke `TankReading` (baris identik digabung, hanya batch aktif) dan `BatchReading` tetap disimpan sebagai arsip.
+- **Target alert** pengukuran tangki mengikuti resep tangki aktif (`activeTankRecipeId`); bila belum diset, pengukuran tetap bisa dicatat tanpa peringatan.
 - **Dua chart library**: recharts (halaman Plan), chart.js (halaman IoT) — tidak dicampur satu halaman.
 - **Listrik (PZEM-004T)**: field `tegangan, arus, daya, energi, frekuensi, power_factor` ditulis ke `_measurement` sama (`hidroponik_sensor`) lewat `POST /api/listrik/ingest` di `iot-api` (langsung ke InfluxDB, **tidak** lewat Node-RED). Firmware NodeMCU mengirim data listrik terpisah dari payload sensor hidroponik. `energi` bersifat kumulatif — pemakaian periode dihitung dari selisihnya. Tarif biaya (Rp/kWh) diatur di UI dan disimpan di `localStorage`.
 - **Kredensial hardcode** di `iot-api/server.js` (token InfluxDB) dan `note.txt` (dapat dioverride lewat env `INFLUXDB_TOKEN`/`INFLUXDB_URL`). Sebaiknya dipindah penuh ke `.env` di task terpisah.
