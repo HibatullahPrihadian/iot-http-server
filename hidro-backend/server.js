@@ -818,6 +818,8 @@ app.post('/api/batches/:id/harvest', (req, res) => {
 });
 
 // POST /api/batches/:id/transfer -> pindah bibit Meja 3 ke pipa kosong Meja 1/2.
+// Bisa multi-tujuan (split): baris sumber berpindah ke target pertama, target
+// berikutnya jadi clone (tanpa readings/gambar). Panen kelak per pipa terpisah.
 // Tanggal (sowDate/transferDate/harvestDate) tidak berubah; hanya lokasi pindah.
 app.post('/api/batches/:id/transfer', (req, res) => {
   try {
@@ -833,37 +835,68 @@ app.post('/api/batches/:id/transfer', (req, res) => {
       return res.status(403).json({ error: 'Hanya bibit dari Meja 3 yang bisa dipindah' });
     }
 
-    const toTable = Number(req.body?.toTable);
-    const toPipe = Number(req.body?.toPipe);
-    if (![1, 2].includes(toTable)) {
-      return res.status(400).json({ error: 'toTable harus 1 atau 2' });
-    }
-    if (!Number.isInteger(toPipe) || toPipe < 1 || toPipe > 6) {
-      return res.status(400).json({ error: 'toPipe harus 1-6' });
-    }
-
-    const occupied = db
-      .prepare(
-        'SELECT id FROM PlantBatch WHERE tableNumber = ? AND pipeNumber = ? AND archivedAt IS NULL'
-      )
-      .get(toTable, toPipe);
-    if (occupied) {
-      return res.status(409).json({ error: 'Pipa tujuan sudah terisi' });
+    // Payload baru: toPipes [{toTable,toPipe}]. Lama: {toTable,toPipe} (1 tujuan).
+    const targets = Array.isArray(req.body?.toPipes)
+      ? req.body.toPipes
+      : [{ toTable: req.body?.toTable, toPipe: req.body?.toPipe }];
+    if (!targets.length) {
+      return res.status(400).json({ error: 'Minimal 1 pipa tujuan' });
     }
 
-    db.prepare('UPDATE PlantBatch SET tableNumber = ?, pipeNumber = ? WHERE id = ?').run(
-      toTable,
-      toPipe,
-      id
+    const seen = new Set();
+    const normalized = [];
+    for (const t of targets) {
+      const toTable = Number(t?.toTable);
+      const toPipe = Number(t?.toPipe);
+      if (![1, 2].includes(toTable)) {
+        return res.status(400).json({ error: 'toTable harus 1 atau 2' });
+      }
+      if (!Number.isInteger(toPipe) || toPipe < 1 || toPipe > 6) {
+        return res.status(400).json({ error: 'toPipe harus 1-6' });
+      }
+      const key = `${toTable}:${toPipe}`;
+      if (seen.has(key)) {
+        return res.status(400).json({ error: 'Pipa tujuan duplikat' });
+      }
+      seen.add(key);
+      normalized.push({ toTable, toPipe });
+    }
+
+    const isOccupied = db.prepare(
+      'SELECT 1 FROM PlantBatch WHERE tableNumber = ? AND pipeNumber = ? AND archivedAt IS NULL'
     );
+    for (const t of normalized) {
+      if (isOccupied.get(t.toTable, t.toPipe)) {
+        return res.status(409).json({ error: `Meja ${t.toTable} Pipa ${t.toPipe} sudah terisi` });
+      }
+    }
 
-    const row = db
-      .prepare(
-        `SELECT b.*, c.name AS plantName, c.totalDays AS totalDays
-         FROM PlantBatch b JOIN PlantCatalog c ON c.id = b.plantId WHERE b.id = ?`
-      )
-      .get(id);
-    res.json(compute(row));
+    db.transaction(() => {
+      db.prepare('UPDATE PlantBatch SET tableNumber = ?, pipeNumber = ? WHERE id = ?').run(
+        normalized[0].toTable,
+        normalized[0].toPipe,
+        id
+      );
+      const insert = db.prepare(
+        `INSERT INTO PlantBatch
+           (tableNumber, pipeNumber, plantId, sowDate, transferDate, harvestDate, status, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const t of normalized.slice(1)) {
+        insert.run(
+          t.toTable,
+          t.toPipe,
+          batch.plantId,
+          batch.sowDate,
+          batch.transferDate,
+          batch.harvestDate,
+          batch.status,
+          batch.notes
+        );
+      }
+    })();
+
+    res.json({ success: true, moved: normalized.length });
   } catch (err) {
     if (err && typeof err.code === 'string' && err.code.startsWith('SQLITE_CONSTRAINT')) {
       return res.status(409).json({ error: 'Pipa tujuan sudah terisi' });

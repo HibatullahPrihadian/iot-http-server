@@ -25,8 +25,7 @@ export default function PlantModal({
   const [busy, setBusy] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [transferMode, setTransferMode] = useState(false)
-  const [toTable, setToTable] = useState('1')
-  const [toPipe, setToPipe] = useState('')
+  const [toPipes, setToPipes] = useState([]) // ['table:pipe', ...]
 
   const isNursery = modal.tableNumber === 3
 
@@ -38,8 +37,7 @@ export default function PlantModal({
     setWeight('')
     setConfirmOpen(false)
     setTransferMode(false)
-    setToTable('1')
-    setToPipe('')
+    setToPipes([])
     if (batch) {
       setPlantId(String(batch.plantId))
       setSowDate(batch.sowDate)
@@ -51,7 +49,7 @@ export default function PlantModal({
 
   if (!modal.open) return null
 
-  // Pipa kosong per meja pembesaran (untuk dropdown tujuan pindah).
+  // Pipa kosong per meja pembesaran (untuk centang tujuan pindah).
   const emptyPipes = (tableNumber) => {
     const filled = new Set(
       (batches || [])
@@ -60,7 +58,7 @@ export default function PlantModal({
     )
     return [1, 2, 3, 4, 5, 6].filter((p) => !filled.has(p))
   }
-  const emptyDest = emptyPipes(Number(toTable))
+  const emptyByTable = { 1: emptyPipes(1), 2: emptyPipes(2) }
 
   async function handlePlant(e) {
     e.preventDefault()
@@ -123,14 +121,23 @@ export default function PlantModal({
     }
   }
 
+  function togglePipe(tableNumber, pipeNumber) {
+    const key = `${tableNumber}:${pipeNumber}`
+    setToPipes((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+    )
+  }
+
   async function handleTransfer(e) {
     e.preventDefault()
     setError('')
     setBusy(true)
     try {
       await post(`/batches/${batch.id}/transfer`, {
-        toTable: Number(toTable),
-        toPipe: Number(toPipe),
+        toPipes: toPipes.map((k) => {
+          const [toTable, toPipe] = k.split(':').map(Number)
+          return { toTable, toPipe }
+        }),
       })
       onSaved()
     } catch (err) {
@@ -220,47 +227,55 @@ export default function PlantModal({
             <form onSubmit={handleTransfer} className="space-y-4">
               <p className="text-sm text-text-dim">
                 Pindahkan <strong className="text-text-hi">{batch.plantName}</strong> dari
-                Meja 3 Pipa {modal.pipeNumber} ke pipa kosong di Meja 1-2.
+                Meja 3 Pipa {modal.pipeNumber} ke pipa kosong di Meja 1-2
+                (boleh lebih dari satu, tiap pipa dipanen terpisah).
                 Umur tanaman tidak berubah.
               </p>
-              <label className="block">
-                <span className="text-sm font-medium text-mid">Meja tujuan</span>
-                <select
-                  value={toTable}
-                  onChange={(e) => {
-                    setToTable(e.target.value)
-                    setToPipe('')
-                  }}
-                  className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2
-                    text-text-body focus:outline-none focus:border-ios-blue focus:ring-2 focus:ring-ios-blue/30"
-                >
-                  <option value="1" className="bg-neutral-900 text-text-body">Meja 1 · Pembesaran</option>
-                  <option value="2" className="bg-neutral-900 text-text-body">Meja 2 · Pembesaran</option>
-                </select>
-              </label>
-              <label className="block">
-                <span className="text-sm font-medium text-mid">Pipa tujuan (kosong)</span>
-                <select
-                  value={toPipe}
-                  onChange={(e) => setToPipe(e.target.value)}
-                  className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2
-                    text-text-body focus:outline-none focus:border-ios-blue focus:ring-2 focus:ring-ios-blue/30"
-                >
-                  <option value="">Pilih pipa...</option>
-                  {emptyDest.map((p) => (
-                    <option key={p} value={p} className="bg-neutral-900 text-text-body">
-                      Pipa {p}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {emptyDest.length === 0 && (
-                <p className="text-xs text-ios-orange">Meja {toTable} penuh, pilih meja lain.</p>
-              )}
+              {[1, 2].map((t) => (
+                <div key={t}>
+                  <span className="text-sm font-medium text-mid">
+                    Meja {t} · Pembesaran
+                  </span>
+                  {emptyByTable[t].length === 0 ? (
+                    <p className="mt-1 text-xs text-ios-orange">Meja {t} penuh.</p>
+                  ) : (
+                    <div className="mt-1.5 flex flex-wrap gap-2">
+                      {emptyByTable[t].map((p) => {
+                        const key = `${t}:${p}`
+                        const checked = toPipes.includes(key)
+                        return (
+                          <button
+                            key={p}
+                            type="button"
+                            onClick={() => togglePipe(t, p)}
+                            aria-pressed={checked}
+                            className={`px-3 py-1.5 rounded-full text-sm font-semibold border transition
+                              ${
+                                checked
+                                  ? 'bg-ios-blue text-white border-ios-blue shadow-glow-blue'
+                                  : 'bg-black/20 text-text-body border-white/10 hover:border-ios-blue/50'
+                              }`}
+                          >
+                            Pipa {p}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              ))}
+              <p className="text-xs text-text-low">
+                {toPipes.length
+                  ? `${toPipes.length} pipa dipilih.`
+                  : 'Pilih minimal satu pipa tujuan.'}
+              </p>
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setTransferMode(false)}
+                  onClick={() => {
+                    setTransferMode(false)
+                    setToPipes([])
+                  }}
                   disabled={busy}
                   className="btn-ios flex-1 border border-white/10 text-text-dim
                     py-2.5 hover:bg-white/5"
@@ -269,11 +284,11 @@ export default function PlantModal({
                 </button>
                 <button
                   type="submit"
-                  disabled={busy || !toPipe}
+                  disabled={busy || toPipes.length === 0}
                   className="btn-ios flex-1 bg-ios-blue hover:shadow-glow-blue disabled:opacity-60
                     text-white py-2.5"
                 >
-                  {busy ? 'Memindah...' : 'Konfirmasi Pindah'}
+                  {busy ? 'Memindah...' : `Konfirmasi Pindah (${toPipes.length})`}
                 </button>
               </div>
             </form>
