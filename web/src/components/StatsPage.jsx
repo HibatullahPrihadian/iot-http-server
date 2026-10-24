@@ -82,6 +82,8 @@ export default function StatsPage() {
 
   const latestReading = tankReadings.length ? tankReadings[0] : null
   const tankAlert = nutritionAlert(latestReading, tankRecipe)
+  // Ringkasan HSS/HST per tanaman (backend kirim `hssHstRealisasi`).
+  const hssHst = Array.isArray(data.hssHstRealisasi) ? data.hssHstRealisasi : []
   // Grafik butuh data urut naik sesuai waktu.
   const chartData = [...tankReadings]
     .reverse()
@@ -217,6 +219,32 @@ export default function StatsPage() {
               <Bar dataKey="realisasi" name="Realisasi" fill="#ff9f0a" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
+        )}
+      </Card>
+
+      <Card title="HSS vs HST (target & realisasi)">
+        {hssHst.length === 0 ? (
+          <Empty />
+        ) : (
+          <>
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={hssHst}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.06)" />
+                <XAxis dataKey="plant" tick={AXIS_TICK} axisLine={{ stroke: 'rgba(255,255,255,0.1)' }} tickLine={false} />
+                <YAxis allowDecimals={false} tick={AXIS_TICK} axisLine={{ stroke: 'rgba(255,255,255,0.1)' }} tickLine={false} />
+                <Tooltip {...TOOLTIP_STYLE} cursor={{ fill: 'rgba(255,255,255,0.05)' }} />
+                <Legend {...LEGEND_STYLE} />
+                <Bar dataKey="estimasiHss" name="Target HSS" fill="#8e8e93" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="realisasiHss" name="HSS aktual" fill="#30d158" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="estimasiHst" name="Target HST" fill="#5e5ce6" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="realisasiHst" name="HST aktual" fill="#ff9f0a" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+            <p className="text-xs text-text-low mt-2">
+              HSS = hari sejak semai, HST = hari sejak pindah ke Meja pembesaran. Target
+              diambil dari katalog (semai + pembesaran), realisasi = rata-rata saat panen.
+            </p>
+          </>
         )}
       </Card>
     </div>

@@ -1,4 +1,4 @@
-import { statusStyle, statusGlow, countdownLabel } from '../utils/status.js'
+import { statusStyle, statusGlow, hssLabel, hstLabel } from '../utils/status.js'
 
 // Satu tabung pipa PVC. Kosong -> abu-abu, terisi -> warna status.
 export default function PipeTube({
@@ -16,15 +16,20 @@ export default function PipeTube({
       <button
         type="button"
         onClick={() => onClick(tableNumber, pipeNumber)}
-        className={`rounded-full h-14 w-full flex items-center justify-between px-5 transition
+        className={`rounded-full h-14 w-full flex items-center justify-between gap-2 px-5 transition
           duration-300 active:scale-[.97] focus:outline-none focus:ring-2 focus:ring-ios-blue/50
           ${style} ${glow}`}
       >
         <span className="text-xs font-semibold opacity-70">Pipa {pipeNumber}</span>
         {batch ? (
-          <span className="flex items-center gap-3">
+          <span className="flex items-center gap-2 flex-wrap justify-end">
             <span className="font-semibold">{batch.plantName}</span>
-            <span className="text-sm">{countdownLabel(batch.daysRemaining)}</span>
+            <span className="text-xs tabular-nums opacity-90" title="Hari Setelah Semai">
+              {hssLabel(batch.hss)}
+            </span>
+            <span className="text-xs tabular-nums opacity-90" title="Hari Setelah Tanam">
+              {hstLabel(batch.hst)}
+            </span>
           </span>
         ) : (
           <span className="text-sm">Kosong</span>

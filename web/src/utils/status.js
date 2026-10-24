@@ -34,6 +34,22 @@ export function countdownLabel(daysRemaining) {
   return `H-${daysRemaining}`
 }
 
+// ---------------------------------------------------------------------------
+// Umur tanaman: HSS (Hari Setelah Semai) & HST (Hari Setelah Tanam/pindah)
+// ---------------------------------------------------------------------------
+
+// HSS = hari sejak tanggal semai. null bila datanya belum ada.
+export function hssLabel(hss) {
+  if (hss === null || hss === undefined) return 'HSS —'
+  return `HSS ${hss}`
+}
+
+// HST = hari sejak tanggal pindah ke Meja pembesaran. null = belum dipindah.
+export function hstLabel(hst) {
+  if (hst === null || hst === undefined) return 'HST —'
+  return `HST ${hst}`
+}
+
 // Format tanggal ISO 'YYYY-MM-DD' atau datetime -> 'D Mmm YYYY' (id-ID).
 const MONTHS = [
   'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
@@ -46,14 +62,6 @@ export function formatDate(value) {
   const [y, m, d] = iso.split('-').map(Number)
   if (!y || !m || !d) return value
   return `${d} ${MONTHS[m - 1]} ${y}`
-}
-
-// Selisih hari antara dua tanggal 'YYYY-MM-DD' (UTC-safe).
-export function daysBetween(fromStr, toStr) {
-  if (!fromStr || !toStr) return null
-  const a = new Date(`${String(fromStr).slice(0, 10)}T00:00:00Z`)
-  const b = new Date(`${String(toStr).slice(0, 10)}T00:00:00Z`)
-  return Math.round((b - a) / 86400000)
 }
 
 // Hari ini format 'YYYY-MM-DD' lokal (untuk default input date).

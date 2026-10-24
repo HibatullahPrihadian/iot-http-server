@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react'
 import { post, put, del } from '../api.js'
-import { countdownLabel, formatDate, todayInput, daysBetween } from '../utils/status.js'
+import {
+  countdownLabel,
+  formatDate,
+  todayInput,
+} from '../utils/status.js'
 import NotesImages from './NotesImages.jsx'
 import ConfirmDialog from './ConfirmDialog.jsx'
 
 // Modal: form tanam baru (pipa kosong Meja 3) atau detail + edit + panen/pindah.
 // Meja 3 = pembibitan (tanam + pindah, tanpa panen). Meja 1-2 = pembesaran (panen, tanpa tanam).
+// Umur tanaman dihitung 2 angka: HSS (hari sejak semai) & HST (hari sejak pindah).
 export default function PlantModal({
   modal,
   catalog,
@@ -18,12 +23,14 @@ export default function PlantModal({
 }) {
   const [plantId, setPlantId] = useState('')
   const [sowDate, setSowDate] = useState(todayInput())
+  const [transplantDate, setTransplantDate] = useState('')
   const [editMode, setEditMode] = useState(false)
   const [weight, setWeight] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [transferMode, setTransferMode] = useState(false)
+  const [transferDate, setTransferDate] = useState(todayInput())
   const [toPipes, setToPipes] = useState([]) // ['table:pipe', ...]
 
   const isNursery = modal.tableNumber === 3
@@ -36,13 +43,16 @@ export default function PlantModal({
     setWeight('')
     setConfirmOpen(false)
     setTransferMode(false)
+    setTransferDate(todayInput())
     setToPipes([])
     if (batch) {
       setPlantId(String(batch.plantId))
       setSowDate(batch.sowDate)
+      setTransplantDate(batch.transplantDate || '')
     } else {
       setPlantId(catalog.length ? String(catalog[0].id) : '')
       setSowDate(todayInput())
+      setTransplantDate('')
     }
   }, [modal, batch, catalog])
 
@@ -82,7 +92,12 @@ export default function PlantModal({
     setError('')
     setBusy(true)
     try {
-      await put(`/batches/${batch.id}`, { plantId: Number(plantId), sowDate })
+      const body = { plantId: Number(plantId), sowDate }
+      // Tanggal pindah aktual (HST) hanya untuk batch yang sudah di Meja 1/2.
+      if (batch.tableNumber !== 3) {
+        body.transplantDate = transplantDate || null
+      }
+      await put(`/batches/${batch.id}`, body)
       onSaved()
     } catch (err) {
       setError(err.message)
@@ -137,6 +152,7 @@ export default function PlantModal({
           const [toTable, toPipe] = k.split(':').map(Number)
           return { toTable, toPipe }
         }),
+        transplantDate: transferDate || undefined,
       })
       onSaved()
     } catch (err) {
@@ -200,6 +216,9 @@ export default function PlantModal({
                 setSowDate={setSowDate}
                 previewTransfer={previewTransfer}
                 previewHarvest={previewHarvest}
+                transplantDate={transplantDate}
+                setTransplantDate={setTransplantDate}
+                showTransplant={batch.tableNumber !== 3}
               />
               <div className="flex gap-2">
                 <button
@@ -228,8 +247,24 @@ export default function PlantModal({
                 Pindahkan <strong className="text-text-hi">{batch.plantName}</strong> dari
                 Meja 3 Pipa {modal.pipeNumber} ke pipa kosong di Meja 1-2
                 (boleh lebih dari satu, tiap pipa dipanen terpisah).
-                Umur tanaman tidak berubah.
               </p>
+              <p className="text-xs text-text-low">
+                HSS ({batch.hss} hari) tetap berjalan. HST mulai dihitung dari tanggal
+                pindah di bawah.
+              </p>
+
+              <label className="block">
+                <span className="text-sm font-medium text-mid">Tanggal pindah (aktual)</span>
+                <input
+                  type="date"
+                  value={transferDate}
+                  max={todayInput()}
+                  min={batch.sowDate}
+                  onChange={(e) => setTransferDate(e.target.value)}
+                  className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2
+                    text-text-body focus:outline-none focus:border-ios-blue focus:ring-2 focus:ring-ios-blue/30"
+                />
+              </label>
               {[1, 2].map((t) => (
                 <div key={t}>
                   <span className="text-sm font-medium text-mid">
@@ -295,13 +330,21 @@ export default function PlantModal({
             <div className="space-y-3">
               <dl className="text-sm text-text-dim space-y-2">
                 <Row label="Tanggal semai" value={formatDate(batch.sowDate)} />
-                <Row label="Pindah (pembesaran)" value={formatDate(batch.transferDate)} />
+                <Row label="Pindah (rencana)" value={formatDate(batch.transferDate)} />
+                <Row
+                  label="Pindah (aktual)"
+                  value={batch.transplantDate ? formatDate(batch.transplantDate) : 'Belum dipindah'}
+                />
                 <Row label="Estimasi panen" value={formatDate(batch.harvestDate)} />
                 <Row label="Hitung mundur" value={countdownLabel(batch.daysRemaining)} />
                 <Row label="Status" value={batch.computedStatus} />
                 <Row
-                  label="Umur"
-                  value={`${daysBetween(batch.sowDate, todayInput())} hari`}
+                  label="HSS (umur sejak semai)"
+                  value={batch.hss != null ? `${batch.hss} hari` : '-'}
+                />
+                <Row
+                  label="HST (umur sejak pindah)"
+                  value={batch.hst != null ? `${batch.hst} hari` : 'Belum dipindah'}
                 />
               </dl>
 
@@ -433,6 +476,9 @@ function PlantFields({
   setSowDate,
   previewTransfer,
   previewHarvest,
+  transplantDate,
+  setTransplantDate,
+  showTransplant,
 }) {
   return (
     <>
@@ -463,6 +509,24 @@ function PlantFields({
             text-text-body focus:outline-none focus:border-ios-blue focus:ring-2 focus:ring-ios-blue/30"
         />
       </label>
+
+      {showTransplant && (
+        <label className="block">
+          <span className="text-sm font-medium text-mid">Tanggal pindah (aktual)</span>
+          <input
+            type="date"
+            value={transplantDate || ''}
+            min={sowDate}
+            max={todayInput()}
+            onChange={(e) => setTransplantDate(e.target.value)}
+            className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2
+              text-text-body focus:outline-none focus:border-ios-blue focus:ring-2 focus:ring-ios-blue/30"
+          />
+          <span className="block text-xs text-text-low mt-1">
+            Kosongkan bila tanggal pindah belum diketahui. HST dihitung dari tanggal ini.
+          </span>
+        </label>
+      )}
 
       {previewHarvest && (
         <p className="text-xs text-text-low">

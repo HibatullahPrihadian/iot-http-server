@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { get, del } from '../api.js'
-import { formatDate, daysBetween } from '../utils/status.js'
+import { formatDate, hssLabel, hstLabel } from '../utils/status.js'
 import ConfirmDialog from './ConfirmDialog.jsx'
 
 // Riwayat batch arsip untuk satu pipa (rotasi). Klik item -> buka detail.
@@ -112,7 +112,9 @@ export default function HistoryModal({
                   </div>
                   <div className="text-xs text-text-low mt-1">
                     Semai {formatDate(r.sowDate)} &middot; Panen {formatDate(r.harvestedAt)}
-                    {r.durationDays != null && ` · ${r.durationDays} hari`}
+                    {r.transplantDate && ` · Pindah ${formatDate(r.transplantDate)}`}
+                    {' · '}
+                    {hssLabel(r.hss)} &middot; {hstLabel(r.hst)}
                     {' '}&middot; Estimasi {r.totalDays} hari
                   </div>
                   {r.notes && (

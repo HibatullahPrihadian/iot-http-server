@@ -68,8 +68,11 @@ export default function HistoryPage({ catalog }) {
       'pipa',
       'tanaman',
       'tanggal_semai',
+      'tanggal_pindah',
       'estimasi_panen',
       'tanggal_panen',
+      'hss',
+      'hst',
       'durasi_hari',
       'estimasi_hari',
       'berat_gram',
@@ -81,8 +84,11 @@ export default function HistoryPage({ catalog }) {
         r.pipeNumber,
         r.plantName,
         r.sowDate,
+        r.transplantDate || '',
         r.harvestDate,
         r.harvestedAt ? r.harvestedAt.slice(0, 10) : '',
+        r.hss ?? '',
+        r.hst ?? '',
         r.durationDays ?? '',
         r.totalDays,
         r.harvestWeightGram ?? '',
@@ -180,8 +186,10 @@ export default function HistoryPage({ catalog }) {
                 <Th>Pipa</Th>
                 <Th>Tanaman</Th>
                 <Th>Semai</Th>
+                <Th>Pindah</Th>
                 <Th>Panen</Th>
-                <Th>Durasi</Th>
+                <Th>HSS</Th>
+                <Th>HST</Th>
                 <Th>Berat</Th>
                 <Th>Aksi</Th>
               </tr>
@@ -193,8 +201,10 @@ export default function HistoryPage({ catalog }) {
                   <Td>{r.pipeNumber}</Td>
                   <Td>{r.plantName}</Td>
                   <Td>{formatDate(r.sowDate)}</Td>
+                  <Td>{r.transplantDate ? formatDate(r.transplantDate) : '-'}</Td>
                   <Td>{formatDate(r.harvestedAt)}</Td>
-                  <Td>{r.durationDays != null ? `${r.durationDays} hari` : '-'}</Td>
+                  <Td>{r.hss != null ? `${r.hss} hari` : '-'}</Td>
+                  <Td>{r.hst != null ? `${r.hst} hari` : '-'}</Td>
                   <Td>{r.harvestWeightGram ? `${r.harvestWeightGram} g` : '-'}</Td>
                   <Td>
                     <button

@@ -18,6 +18,9 @@ app.use(express.json());
 // Sajikan gambar langsung (dev). Di Docker juga diproxy lewat nginx /uploads/.
 app.use('/uploads', express.static(UPLOAD_DIR));
 
+// Versi aplikasi (dari package.json service ini; sinkron dengan /VERSION root).
+const APP_VERSION = require('./package.json').version;
+
 const MS_PER_DAY = 86400000;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_NOTES = 2000;
@@ -61,9 +64,25 @@ const PHASES = ['Semai', 'Pembesaran'];
 // Batas jumlah pembacaan yang dikembalikan agar payload tak membengkak.
 const MAX_READINGS = 500;
 
-// Fase aktif batch berdasarkan perbandingan hari ini vs tanggal pindah.
+// Fase aktif batch: 'Pembesaran' bila sudah dipindah ke Meja 1/2 (tanggal pindah
+// aktual tercatat atau lokasinya bukan Meja 3), selain itu 'Semai' (pembibitan).
 function activePhase(batch) {
+  if (batch.transplantDate) return 'Pembesaran';
+  if (batch.tableNumber === 3) return 'Semai';
+  // Batch lama di Meja 1/2 tanpa tanggal pindah -> pakai tanggal rencana.
   return todayISO() < batch.transferDate ? 'Semai' : 'Pembesaran';
+}
+
+// Tanggal turunan batch dari tanggal semai + tanggal pindah aktual.
+// - transferDate = RENCANA pindah (sowDate + seedlingDays)
+// - harvestDate  = estimasi panen: belum dipindah -> sowDate + totalDays;
+//                  sudah dipindah  -> transplantDate + growDays (target HST)
+function computeDates({ sowDate, transplantDate }, plant) {
+  const transferDate = addDays(sowDate, plant.seedlingDays);
+  const harvestDate = transplantDate
+    ? addDays(transplantDate, plant.growDays)
+    : addDays(sowDate, plant.totalDays);
+  return { transferDate, harvestDate };
 }
 
 // Resep (PlantRecipe) yang berlaku untuk batch sesuai fase aktifnya.
@@ -199,6 +218,15 @@ function validateReadingPayload(body) {
   };
 }
 
+// Umur tanaman (HSS/HST) untuk batch.
+// HSS = hari sejak tanggal semai, HST = hari sejak tanggal pindah aktual.
+// Batch arsip dibekukan pada tanggal panen (tidak ikut bertambah).
+function computeAges(row, refDate) {
+  const hss = daysBetween(row.sowDate, refDate);
+  const hst = row.transplantDate ? daysBetween(row.transplantDate, refDate) : null;
+  return { hss, hst };
+}
+
 // Tambah field hitungan runtime ke row batch.
 function compute(row) {
   const today = todayISO();
@@ -208,19 +236,26 @@ function compute(row) {
   );
 
   let computedStatus;
-  if (daysRemaining <= 3) {
+  if (row.tableNumber !== 3 && daysRemaining <= 3) {
     computedStatus = 'Siap Panen';
-  } else if (today >= row.transferDate) {
+  } else if (activePhase(row) === 'Pembesaran') {
     computedStatus = 'Pembesaran';
   } else {
     computedStatus = 'Semai';
   }
+
+  const refDate = row.harvestedAt ? String(row.harvestedAt).slice(0, 10) : today;
+  const { hss, hst } = computeAges(row, refDate);
 
   return {
     ...row,
     daysRemaining,
     computedStatus,
     hasHistory: Boolean(row.hasHistory),
+    hss,
+    hst,
+    hssTarget: row.seedlingDays ?? null,
+    hstTarget: row.growDays ?? null,
   };
 }
 
@@ -353,6 +388,11 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+// GET /api/version -> versi aplikasi yang sedang berjalan.
+app.get('/api/version', (req, res) => {
+  res.json({ version: APP_VERSION, service: 'hidro-backend' });
+});
+
 // GET /api/catalog -> semua tanaman + flag hasRecipe (ada resep RCP).
 app.get('/api/catalog', (req, res) => {
   try {
@@ -376,7 +416,7 @@ app.get('/api/batches', (req, res) => {
   try {
     const rows = db
       .prepare(
-        `SELECT b.*, c.name AS plantName, c.totalDays AS totalDays,
+        `SELECT b.*, c.name AS plantName, c.totalDays AS totalDays, c.seedlingDays, c.growDays,
                 EXISTS(
                   SELECT 1 FROM PlantBatch h
                   WHERE h.tableNumber = b.tableNumber
@@ -435,8 +475,10 @@ app.post('/api/batches', (req, res) => {
       return res.status(409).json({ error: 'Pipa sudah terisi, panen dulu sebelum tanam ulang' });
     }
 
-    const transferDate = addDays(sowDate, plant.seedlingDays);
-    const harvestDate = addDays(sowDate, plant.totalDays);
+    const { transferDate, harvestDate } = computeDates(
+      { sowDate, transplantDate: null },
+      plant
+    );
 
     const info = db
       .prepare(
@@ -448,7 +490,7 @@ app.post('/api/batches', (req, res) => {
 
     const row = db
       .prepare(
-        `SELECT b.*, c.name AS plantName, c.totalDays AS totalDays
+        `SELECT b.*, c.name AS plantName, c.totalDays AS totalDays, c.seedlingDays, c.growDays
          FROM PlantBatch b
          JOIN PlantCatalog c ON c.id = b.plantId
          WHERE b.id = ?`
@@ -559,17 +601,19 @@ app.put('/api/catalog/:id', (req, res) => {
 
       // Recompute tanggal untuk batch AKTIF yang memakai katalog ini.
       const active = db
-        .prepare('SELECT id, sowDate FROM PlantBatch WHERE plantId = ? AND archivedAt IS NULL')
+        .prepare(
+          'SELECT id, sowDate, transplantDate FROM PlantBatch WHERE plantId = ? AND archivedAt IS NULL'
+        )
         .all(id);
       const update = db.prepare(
         'UPDATE PlantBatch SET transferDate = ?, harvestDate = ? WHERE id = ?'
       );
       for (const b of active) {
-        update.run(
-          addDays(b.sowDate, value.seedlingDays),
-          addDays(b.sowDate, value.totalDays),
-          b.id
+        const { transferDate, harvestDate } = computeDates(
+          { sowDate: b.sowDate, transplantDate: b.transplantDate ?? null },
+          value
         );
+        update.run(transferDate, harvestDate, b.id);
       }
     });
     tx();
@@ -739,7 +783,7 @@ app.get('/api/batches/history', (req, res) => {
 
     const rows = db
       .prepare(
-        `SELECT b.*, c.name AS plantName, c.totalDays AS totalDays
+        `SELECT b.*, c.name AS plantName, c.totalDays AS totalDays, c.seedlingDays, c.growDays
          FROM PlantBatch b
          JOIN PlantCatalog c ON c.id = b.plantId
          WHERE ${where.join(' AND ')}
@@ -749,10 +793,17 @@ app.get('/api/batches/history', (req, res) => {
       .all(...params, limit, offset);
 
     res.json(
-      rows.map((r) => ({
-        ...r,
-        durationDays: r.harvestedAt ? daysBetween(r.sowDate, r.harvestedAt.slice(0, 10)) : null,
-      }))
+      rows.map((r) => {
+        // Umur dibekukan pada tanggal panen.
+        const harvestDay = r.harvestedAt ? String(r.harvestedAt).slice(0, 10) : null;
+        const { hss, hst } = computeAges(r, harvestDay || r.sowDate);
+        return {
+          ...r,
+          hss,
+          hst,
+          durationDays: harvestDay ? daysBetween(r.sowDate, harvestDay) : null,
+        };
+      })
     );
   } catch (err) {
     console.error(err);
@@ -760,7 +811,7 @@ app.get('/api/batches/history', (req, res) => {
   }
 });
 
-// PUT /api/batches/:id -> edit batch aktif (plantId + sowDate).
+// PUT /api/batches/:id -> edit batch aktif (plantId, sowDate, transplantDate).
 app.put('/api/batches/:id', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -783,6 +834,39 @@ app.put('/api/batches/:id', (req, res) => {
       return res.status(400).json({ error: 'sowDate tidak boleh di masa depan' });
     }
 
+    // Tanggal pindah aktual (dasar HST): undefined = tidak diubah, null = dikosongkan.
+    const hasTransplantField =
+      req.body !== null &&
+      typeof req.body === 'object' &&
+      Object.prototype.hasOwnProperty.call(req.body, 'transplantDate');
+    let transplantDate = batch.transplantDate ?? null;
+    if (hasTransplantField) {
+      const raw = req.body.transplantDate;
+      if (raw === null || raw === undefined || raw === '') {
+        transplantDate = null;
+      } else {
+        if (!isValidDate(raw)) {
+          return res
+            .status(400)
+            .json({ error: 'transplantDate harus format YYYY-MM-DD yang valid' });
+        }
+        if (raw > todayISO()) {
+          return res.status(400).json({ error: 'transplantDate tidak boleh di masa depan' });
+        }
+        if (raw < sowDate) {
+          return res
+            .status(400)
+            .json({ error: 'transplantDate tidak boleh lebih awal dari sowDate' });
+        }
+        transplantDate = raw;
+      }
+      if (batch.tableNumber === 3 && transplantDate) {
+        return res.status(409).json({
+          error: 'Batch masih di Meja 3 (pembibitan), HST belum mulai',
+        });
+      }
+    }
+
     const plant = db.prepare('SELECT * FROM PlantCatalog WHERE id = ?').get(plantId);
     if (!plant) return res.status(400).json({ error: 'plantId tidak ada di katalog' });
 
@@ -790,18 +874,20 @@ app.put('/api/batches/:id', (req, res) => {
     // berubah di tengah perhitungan (better-sqlite3 sinkron -> serialisasi aman).
     db.transaction(() => {
       const current = db.prepare('SELECT * FROM PlantCatalog WHERE id = ?').get(plantId);
-      const transferDate = addDays(sowDate, current.seedlingDays);
-      const harvestDate = addDays(sowDate, current.totalDays);
+      const { transferDate, harvestDate } = computeDates(
+        { sowDate, transplantDate },
+        current
+      );
       db.prepare(
         `UPDATE PlantBatch
-         SET plantId = ?, sowDate = ?, transferDate = ?, harvestDate = ?
+         SET plantId = ?, sowDate = ?, transferDate = ?, harvestDate = ?, transplantDate = ?
          WHERE id = ?`
-      ).run(plantId, sowDate, transferDate, harvestDate, id);
+      ).run(plantId, sowDate, transferDate, harvestDate, transplantDate, id);
     })();
 
     const row = db
       .prepare(
-        `SELECT b.*, c.name AS plantName, c.totalDays AS totalDays
+        `SELECT b.*, c.name AS plantName, c.totalDays AS totalDays, c.seedlingDays, c.growDays
          FROM PlantBatch b JOIN PlantCatalog c ON c.id = b.plantId WHERE b.id = ?`
       )
       .get(id);
@@ -846,12 +932,15 @@ app.post('/api/batches/:id/harvest', (req, res) => {
 
     const row = db
       .prepare(
-        `SELECT b.*, c.name AS plantName, c.totalDays AS totalDays
+        `SELECT b.*, c.name AS plantName, c.totalDays AS totalDays, c.seedlingDays, c.growDays
          FROM PlantBatch b JOIN PlantCatalog c ON c.id = b.plantId WHERE b.id = ?`
       )
       .get(id);
+    const { hss, hst } = computeAges(row, now.slice(0, 10));
     res.json({
       ...row,
+      hss,
+      hst,
       durationDays: daysBetween(row.sowDate, now.slice(0, 10)),
     });
   } catch (err) {
@@ -863,7 +952,8 @@ app.post('/api/batches/:id/harvest', (req, res) => {
 // POST /api/batches/:id/transfer -> pindah bibit Meja 3 ke pipa kosong Meja 1/2.
 // Bisa multi-tujuan (split): baris sumber berpindah ke target pertama, target
 // berikutnya jadi clone (tanpa readings/gambar). Panen kelak per pipa terpisah.
-// Tanggal (sowDate/transferDate/harvestDate) tidak berubah; hanya lokasi pindah.
+// Tanggal pindah aktual dicatat -> HST mulai dihitung dari tanggal itu; estimasi
+// panen dihitung ulang dari target HST (growDays).
 app.post('/api/batches/:id/transfer', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -876,6 +966,26 @@ app.post('/api/batches/:id/transfer', (req, res) => {
     }
     if (batch.tableNumber !== 3) {
       return res.status(403).json({ error: 'Hanya bibit dari Meja 3 yang bisa dipindah' });
+    }
+
+    // Tanggal pindah aktual (opsional; default hari ini).
+    const rawTransplant = req.body?.transplantDate;
+    let transplantDate = todayISO();
+    if (rawTransplant !== undefined && rawTransplant !== null && rawTransplant !== '') {
+      if (!isValidDate(rawTransplant)) {
+        return res
+          .status(400)
+          .json({ error: 'transplantDate harus format YYYY-MM-DD yang valid' });
+      }
+      if (rawTransplant > todayISO()) {
+        return res.status(400).json({ error: 'transplantDate tidak boleh di masa depan' });
+      }
+      if (rawTransplant < batch.sowDate) {
+        return res
+          .status(400)
+          .json({ error: 'transplantDate tidak boleh lebih awal dari sowDate' });
+      }
+      transplantDate = rawTransplant;
     }
 
     // Payload baru: toPipes [{toTable,toPipe}]. Lama: {toTable,toPipe} (1 tujuan).
@@ -914,16 +1024,23 @@ app.post('/api/batches/:id/transfer', (req, res) => {
       }
     }
 
+    const plant = db.prepare('SELECT * FROM PlantCatalog WHERE id = ?').get(batch.plantId);
+    if (!plant) return res.status(400).json({ error: 'plantId tidak ada di katalog' });
+    const { harvestDate } = computeDates(
+      { sowDate: batch.sowDate, transplantDate },
+      plant
+    );
+
     db.transaction(() => {
-      db.prepare('UPDATE PlantBatch SET tableNumber = ?, pipeNumber = ? WHERE id = ?').run(
-        normalized[0].toTable,
-        normalized[0].toPipe,
-        id
-      );
+      db.prepare(
+        `UPDATE PlantBatch
+         SET tableNumber = ?, pipeNumber = ?, transplantDate = ?, harvestDate = ?, status = 'Pembesaran'
+         WHERE id = ?`
+      ).run(normalized[0].toTable, normalized[0].toPipe, transplantDate, harvestDate, id);
       const insert = db.prepare(
         `INSERT INTO PlantBatch
-           (tableNumber, pipeNumber, plantId, sowDate, transferDate, harvestDate, status, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+           (tableNumber, pipeNumber, plantId, sowDate, transferDate, harvestDate, status, notes, transplantDate)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
       for (const t of normalized.slice(1)) {
         insert.run(
@@ -932,14 +1049,15 @@ app.post('/api/batches/:id/transfer', (req, res) => {
           batch.plantId,
           batch.sowDate,
           batch.transferDate,
-          batch.harvestDate,
-          batch.status,
-          batch.notes
+          harvestDate,
+          'Pembesaran',
+          batch.notes,
+          transplantDate
         );
       }
     })();
 
-    res.json({ success: true, moved: normalized.length });
+    res.json({ success: true, moved: normalized.length, transplantDate });
   } catch (err) {
     if (err && typeof err.code === 'string' && err.code.startsWith('SQLITE_CONSTRAINT')) {
       return res.status(409).json({ error: 'Pipa tujuan sudah terisi' });
@@ -1191,7 +1309,7 @@ app.get('/api/stats/summary', (req, res) => {
   try {
     const archived = db
       .prepare(
-        `SELECT b.*, c.name AS plantName, c.totalDays AS totalDays
+        `SELECT b.*, c.name AS plantName, c.totalDays AS totalDays, c.seedlingDays, c.growDays
          FROM PlantBatch b
          JOIN PlantCatalog c ON c.id = b.plantId
          WHERE b.archivedAt IS NOT NULL AND b.harvestedAt IS NOT NULL`
@@ -1219,19 +1337,48 @@ app.get('/api/stats/summary', (req, res) => {
     }));
 
     // Estimasi vs realisasi: rata-rata durasi aktual vs totalDays katalog.
+    // Disimpan per tanaman juga rincian HSS (target vs realisasi) dan HST.
     const byPlant = {};
     for (const r of archived) {
-      const dur = daysBetween(r.sowDate, r.harvestedAt.slice(0, 10));
+      const harvestDay = r.harvestedAt.slice(0, 10);
+      const hss = daysBetween(r.sowDate, harvestDay);
+      const hst = r.transplantDate ? daysBetween(r.transplantDate, harvestDay) : null;
       if (!byPlant[r.plantName]) {
-        byPlant[r.plantName] = { plant: r.plantName, estimasi: r.totalDays, total: 0, n: 0 };
+        byPlant[r.plantName] = {
+          plant: r.plantName,
+          estimasi: r.totalDays,
+          total: 0,
+          n: 0,
+          estimasiHss: r.seedlingDays,
+          estimasiHst: r.growDays,
+          hssTotal: 0,
+          hstTotal: 0,
+          hstN: 0,
+        };
       }
-      byPlant[r.plantName].total += dur;
-      byPlant[r.plantName].n += 1;
+      const p = byPlant[r.plantName];
+      p.total += daysBetween(r.sowDate, harvestDay);
+      p.n += 1;
+      p.hssTotal += hss;
+      if (hst !== null) {
+        p.hstTotal += hst;
+        p.hstN += 1;
+      }
     }
     const estimasiVsRealisasi = Object.values(byPlant).map((p) => ({
       plant: p.plant,
       estimasi: p.estimasi,
       realisasi: Math.round((p.total / p.n) * 10) / 10,
+    }));
+
+    // Ringkasan HSS/HST per tanaman (target katalog vs realisasi saat panen).
+    const hssHstRealisasi = Object.values(byPlant).map((p) => ({
+      plant: p.plant,
+      estimasiHss: p.estimasiHss,
+      realisasiHss: Math.round((p.hssTotal / p.n) * 10) / 10,
+      estimasiHst: p.estimasiHst,
+      realisasiHst: p.hstN ? Math.round((p.hstTotal / p.hstN) * 10) / 10 : null,
+      sampelHst: p.hstN,
     }));
 
     // Keterisian: batch aktif / 18 pipa (3 meja x 6 pipa).
@@ -1243,6 +1390,7 @@ app.get('/api/stats/summary', (req, res) => {
       harvestByMonth,
       harvestByPlant,
       estimasiVsRealisasi,
+      hssHstRealisasi,
       occupancy: { occupied, total: 18, ratio: occupied / 18 },
     });
   } catch (err) {

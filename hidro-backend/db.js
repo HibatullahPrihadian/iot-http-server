@@ -76,7 +76,7 @@ db.exec(`
           );
         `);
         const oldCols = db.prepare('PRAGMA table_info(PlantBatch_old)').all().map((c) => c.name);
-        const wanted = ['id', 'tableNumber', 'pipeNumber', 'plantId', 'sowDate', 'transferDate', 'harvestDate', 'status', 'notes', 'harvestedAt', 'archivedAt', 'harvestWeightGram'];
+        const wanted = ['id', 'tableNumber', 'pipeNumber', 'plantId', 'sowDate', 'transferDate', 'harvestDate', 'status', 'notes', 'harvestedAt', 'archivedAt', 'harvestWeightGram', 'transplantDate'];
         const cols = wanted.filter((c) => oldCols.includes(c));
         db.exec(`INSERT INTO PlantBatch (${cols.join(', ')}) SELECT ${cols.join(', ')} FROM PlantBatch_old`);
         db.exec('DROP TABLE PlantBatch_old');
@@ -160,6 +160,9 @@ addColumnIfMissing('PlantBatch', 'notes', 'TEXT');
 addColumnIfMissing('PlantBatch', 'harvestedAt', 'TEXT');
 addColumnIfMissing('PlantBatch', 'archivedAt', 'TEXT');
 addColumnIfMissing('PlantBatch', 'harvestWeightGram', 'INTEGER');
+
+// Tanggal pindah AKTUAL (dasar hitung HST). NULL = masih di Meja 3 (pembibitan).
+addColumnIfMissing('PlantBatch', 'transplantDate', 'TEXT');
 
 // Tabel gambar batch (Fase 2).
 db.exec(`
@@ -253,6 +256,32 @@ db.exec(`
     value TEXT
   );
 `);
+
+// Backfill sekali: batch yang sudah berada di Meja 1/2 (artinya sudah dipindah)
+// tapi belum punya tanggal pindah aktual -> pakai transferDate (rencana) sebagai
+// perkiraan terbaik, supaya HST tetap terhitung untuk data lama.
+{
+  const KEY = 'transplantDateBackfilled';
+  const already = db.prepare('SELECT value FROM AppSetting WHERE key = ?').get(KEY);
+  if (!already) {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const info = db
+        .prepare(
+          `UPDATE PlantBatch SET transplantDate = transferDate
+           WHERE transplantDate IS NULL AND tableNumber IN (1, 2) AND transferDate <= ?`
+        )
+        .run(today);
+      db.prepare(
+        `INSERT INTO AppSetting (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+      ).run(KEY, String(info.changes));
+      console.log(`Migrasi: backfill tanggal pindah aktual (${info.changes} baris).`);
+    } catch (err) {
+      console.error('Backfill tanggal pindah gagal:', err.message);
+    }
+  }
+}
 
 // Pengukuran nutrisi LEVEL TANGKI (satu tangki untuk 3 meja, bukan per pipa).
 db.exec(`
