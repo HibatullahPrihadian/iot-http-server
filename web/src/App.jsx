@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { get } from './api.js'
+import { APP_VERSION } from './version.js'
 import TableSection from './components/TableSection.jsx'
 import PlantModal from './components/PlantModal.jsx'
 import LegendBar from './components/LegendBar.jsx'
@@ -204,10 +205,18 @@ export default function App() {
 
   return (
     <div className="min-h-screen">
-      <header className="sticky top-0 z-30 bg-surface-bg/90 backdrop-blur border-b border-white/10">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4 flex-wrap">
-          <h1 className="text-lg font-bold text-text-hi">Hidroponik</h1>
-          <nav className="flex gap-1.5">
+        <header className="sticky top-0 z-30 bg-surface-bg/90 backdrop-blur border-b border-white/10">
+          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-baseline gap-2">
+              <h1 className="text-lg font-bold text-text-hi">Hidroponik</h1>
+              <span
+                className="text-xs font-semibold text-text-low tabular-nums"
+                title="Versi aplikasi"
+              >
+                v{APP_VERSION}
+              </span>
+            </div>
+            <nav className="flex gap-1.5">
             {SECTIONS.map((s) => {
               const active = location.pathname.startsWith(s.to)
               return (

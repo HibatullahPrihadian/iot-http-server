@@ -1,0 +1,27 @@
+#!/bin/sh
+# Hook git commit-msg: WAJIB setiap pesan commit memuat versi aplikasi.
+#
+# Aturan: subjek pesan harus memuat "v<versi>" (mis. "v1.0.0"), contoh:
+#   "Fitur HSS/HST: hitung umur tanaman [v1.0.0]"
+#   "v1.0.1: fix hitung mundur"
+#
+# Versi dibaca dari file VERSION di root repo (sumber tunggal).
+# Pesan yang ditolak tetap boleh dikoreksi: git commit --amend.
+#
+# Hook ini dipasang lewat `git config core.hooksPath .githooks`
+# (dijalankan otomatis oleh scripts/install-hooks.mjs).
+#
+# Disable sementara: git commit --no-verify
+set -e
+
+ROOT=$(git rev-parse --show-toplevel)
+MSG_FILE=$1
+
+node "$ROOT/scripts/check-version.mjs" "$MSG_FILE" || {
+  echo ""
+  echo "Commit ditolak: versi aplikasi wajib dicantumkan di pesan commit."
+  echo "Naikkan versi bila perlu: npm run version:bump -- patch"
+  exit 1
+}
+
+exit 0

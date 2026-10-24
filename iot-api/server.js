@@ -2,6 +2,9 @@ const express = require('express');
 const cors = require('cors');
 const { InfluxDB, Point } = require('@influxdata/influxdb-client');
 
+// Versi aplikasi (dari package.json service ini; sinkron dengan /VERSION root).
+const APP_VERSION = require('./package.json').version;
+
 const app = express();
 const port = 3000;
 
@@ -126,7 +129,12 @@ async function hitungEnergiPeriode(rangeQuery) {
 // --- ROUTES (API ENDPOINT) ---
 // 1. Route Default (Cek Status Server)
 app.get('/', (req, res) => {
-    res.json({ message: "Server API Hidroponik Aktif!" });
+    res.json({ message: "Server API Hidroponik Aktif!", version: APP_VERSION });
+});
+
+// 1b. Versi aplikasi (untuk indikator versi di UI).
+app.get('/api/version', (req, res) => {
+    res.json({ version: APP_VERSION, service: 'iot-api' });
 });
 
 // 2. Route untuk Mengambil History Data Sensor (untuk Grafik & Realtime)

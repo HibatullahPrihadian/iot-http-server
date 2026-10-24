@@ -25,3 +25,6 @@ hidro-data/
 # OS junk
 .DS_Store
 ._*
+
+# Tooling lokal (Kilo)
+.kilo/

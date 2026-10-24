@@ -54,6 +54,7 @@ iot-http-server/
 
 ```bash
 cp .env.example .env      # WAJIB: isi DEVICE_TOKEN
+npm run setup             # pasang hook commit-msg (wajib versi di pesan commit)
 docker compose up -d --build
 ```
 
@@ -72,6 +73,21 @@ docker compose ps            # cek status (hidro-backend harus "healthy")
 docker compose logs -f       # lihat log
 docker compose down          # hentikan
 ```
+
+## Versi aplikasi
+
+Sumber versi tunggal: file `VERSION` di root repo (dimulai dari `1.0.0`).
+Semua `package.json` (root, `web`, `iot-api`, `hidro-backend`) memakai versi
+yang sama; `scripts/check-version.mjs` menegakkan sinkronisasi.
+
+- **Setiap pesan commit wajib memuat versi aplikasi** (`v<versi>`), dijaga hook
+  `commit-msg` (`.githooks/`). Hook dipasang lewat `git config core.hooksPath
+  .githooks` (disimpan di `.git/config`, tidak ikut ter-commit) — clone baru
+  menjalankan `npm run setup`.
+- Naikkan versi: `npm run version:bump -- patch|minor|major`, lalu perbarui
+  `version` di seluruh `package.json` dan jalankan `npm run version:check`.
+- Versi tampil di header UI (`v1.0.0`) dan tersedia lewat
+  `GET /api/version` pada kedua backend.
 
 ## Konfigurasi (env)
 
@@ -108,6 +124,7 @@ docker compose down          # hentikan
 | POST | `/api/listrik/ingest` | `{ tegangan, arus, daya, energi, frekuensi, power_factor }` → tulis langsung ke InfluxDB (butuh `X-Device-Token`) |
 | GET | `/api/device/commands` | Perangkat: perintah pending (butuh `X-Device-Token`) |
 | POST | `/api/device/commands/:id/ack` | Perangkat: hapus perintah (butuh `X-Device-Token`) |
+| GET | `/api/version` | Versi aplikasi -> `{ version, service }` |
 
 ### Ingest (Node-RED)
 
@@ -122,21 +139,23 @@ Detail kontrak HTTP + token ada di [`dokumentasi.md`](dokumentasi.md).
 | Method | Endpoint | Keterangan |
 |---|---|---|
 | GET | `/api/health` | Healthcheck -> `{ status: 'ok' }` |
+| GET | `/api/version` | Versi aplikasi -> `{ version, service }` |
 | GET | `/api/catalog` | Daftar tanaman (+ `hasRecipe`) |
 | POST | `/api/catalog` | Tambah tanaman: `{ name, seedlingDays, growDays }` |
 | PUT | `/api/catalog/:id` | Update tanaman + recompute `harvestDate` batch aktif |
 | DELETE | `/api/catalog/:id` | Hapus tanaman (tolak `409` bila dipakai batch) |
-| GET | `/api/batches` | Batch **aktif** + `computedStatus`, `daysRemaining`, `hasHistory` |
+| GET | `/api/batches` | Batch **aktif** + `computedStatus`, `daysRemaining`, `hss`, `hst`, `hasHistory` |
 | POST | `/api/batches` | Tanam baru: `{ tableNumber, pipeNumber, plantId, sowDate }` |
-| PUT | `/api/batches/:id` | Edit batch aktif: `{ plantId?, sowDate? }` |
+| PUT | `/api/batches/:id` | Edit batch aktif: `{ plantId?, sowDate?, transplantDate? }` (kosongkan `transplantDate` = belum dipindah) |
 | DELETE | `/api/batches/:id` | Batal tanam (hapus permanen + file gambar) |
 | POST | `/api/batches/:id/harvest` | Panen/arsip: `{ harvestWeightGram?, notes? }` |
-| GET | `/api/batches/history` | Riwayat arsip; filter `tableNumber, pipeNumber, plantId, from, to, limit, offset` |
+| POST | `/api/batches/:id/transfer` | Pindah Meja 3 → Meja 1/2: `{ toPipes: [{toTable,toPipe}], transplantDate? }` (default hari ini) |
+| GET | `/api/batches/history` | Riwayat arsip + `hss`/`hst` beku di tanggal panen; filter `tableNumber, pipeNumber, plantId, from, to, limit, offset` |
 | PUT | `/api/batches/:id/notes` | Set/hapus catatan: `{ notes }` |
 | POST | `/api/batches/:id/images` | Upload gambar (multipart field `image`, maks 5MB, maks 5/batch) |
 | GET | `/api/batches/:id/images` | Daftar gambar batch |
 | DELETE | `/api/batches/:id/images/:imageId` | Hapus gambar + file fisik |
-| GET | `/api/stats/summary` | `{ harvestByMonth, harvestByPlant, estimasiVsRealisasi, occupancy }` |
+| GET | `/api/stats/summary` | `{ harvestByMonth, harvestByPlant, estimasiVsRealisasi, hssHstRealisasi, occupancy }` |
 
 #### RCP (resep nutrisi)
 
@@ -159,7 +178,16 @@ gram = (targetPpm - ppmAirAwal) * volumeAir / 1000 * konstanta
 
 ## Catatan
 
-- **Status**: tersimpan hanya `Semai` / `Pembesaran`; `Siap Panen` dihitung runtime bila `daysRemaining <= 3`.
+- **Umur tanaman = HSS + HST** (menggantikan hitungan "umur" tunggal):
+  - **HSS** (*Hari Setelah Semai*) = hari sejak `sowDate`. Berjalan sejak bitek disemai di Meja 3.
+  - **HST** (*Hari Setelah Tanam/pindah*) = hari sejak `transplantDate` (tanggal **pindah aktual** ke Meja 1/2). `null` selama masih di Meja 3 (pembibitan).
+  - Ditampilkan di tile pipa (`HSS 14 · HST 6`), detail batch, riwayat, dan chart statistik.
+  - Kolom baru `PlantBatch.transplantDate` (aditif). Batch lama di Meja 1/2 di-backfill sekali dari `transferDate` (rencana) sebagai perkiraan terbaik.
+  - `transferDate` = **rencana** pindah (`sowDate + seedlingDays`); `transplantDate` = **aktual** (dicatat saat Pindah, bisa dikoreksi lewat Edit).
+  - Estimasi panen dihitung ulang: belum dipindah → `sowDate + totalDays`; sudah dipindah → `transplantDate + growDays` (target HST).
+  - Fase (resep `Semai`/`Pembesaran`) mengikuti lokasi & tanggal pindah aktual, bukan lagi tanggal rencana.
+  - Batch arsip membekukan umur saat panen (HSS/HST dihitung sampai tanggal panen).
+- **Status**: tersimpan hanya `Semai` / `Pembesaran`; `Siap Panen` dihitung runtime bila `daysRemaining <= 3` (Meja 3 tidak pernah `Siap Panen`).
 - **Panen = arsip** (`archivedAt`), bukan hapus; pipa jadi kosong dan bisa ditanam ulang (partial unique index `WHERE archivedAt IS NULL`).
 - **Gambar**: JPG/PNG/WEBP, maks 5MB (`client_max_body_size 6m` + multer 5MB), maks 5/batch; disajikan via `/uploads/<file>`.
 - Migrasi DB bersifat **aditif**; data lama tetap utuh.
