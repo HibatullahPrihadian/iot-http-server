@@ -92,9 +92,12 @@ export const SENSOR_ORDER = [
   'suhu_air',
 ]
 
-// Opsi filter waktu — 8 opsi (code = source of truth, dokumentasi.md lama hanya 5).
+// Opsi filter waktu — 11 opsi (code = source of truth, dokumentasi.md lama hanya 5).
 export const FILTERS = [
   { value: 'realtime', label: 'Data Terkini (40 Titik)' },
+  { value: '1hour', label: 'Riwayat 1 Jam' },
+  { value: '3hour', label: 'Riwayat 3 Jam' },
+  { value: '6hour', label: 'Riwayat 6 Jam' },
   { value: '12hour', label: 'Riwayat 12 Jam' },
   { value: '1day', label: 'Riwayat 24 Jam' },
   { value: '1week', label: 'Riwayat 7 Hari' },
@@ -107,6 +110,9 @@ export const FILTERS = [
 // Opsi filter trend.html (subset, ada '2month' alih-alih '2week').
 export const TREND_FILTERS = [
   { value: 'realtime', label: 'Real-Time (40 Terakhir)' },
+  { value: '1hour', label: '1 Jam Terakhir' },
+  { value: '3hour', label: '3 Jam Terakhir' },
+  { value: '6hour', label: '6 Jam Terakhir' },
   { value: '12hour', label: '12 Jam Terakhir' },
   { value: '1day', label: '1 Hari Terakhir' },
   { value: '1week', label: '1 Pekan Terakhir' },

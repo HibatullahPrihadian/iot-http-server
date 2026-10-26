@@ -152,21 +152,29 @@ app.get('/api/sensor-data', async (req, res) => {
     // (itu penyebab bug realtime kosong sebelumnya).
     // Urutan akhir dikembalikan ASC (naik) agar konsisten dengan kontrak lama:
     // UI mengambil titik terbaru di data[data.length-1].
-    // Listrik dikirim 1Hz -> jendela lebih lebar (120 titik ~ 2 menit) agar
+    // Listrik dikirim ~1Hz -> jendela lebih lebar (120 titik ~ 2 menit) agar
     // chart tidak cuma ~40 detik; hidroponik tetap 40.
-    const tailLimit = includeListrik ? 120 : 40;
-    let tailPerFieldQuery = `
-        |> sort(columns: ["_time"], desc: true)
-        |> group(columns: ["_field"])
-        |> limit(n: ${tailLimit})
-        |> group()
-        |> sort(columns: ["_time"], desc: false)`;
+    // Filter riwayat pendek (1/3/6 jam) menaikkan nilai ini di bawah, supaya
+    // bucket jendela penuh tidak ikut terpotong oleh limit.
+    let tailLimit = includeListrik ? 120 : 40;
 
     // Konfigurasi dinamis rentang waktu dan downsampling.
     // `energi` bersifat kumulatif, jadi TIDAK boleh dirata-rata (mean akan
     // merusak nilai kWh dan differensinya). Field lain di-downsample dengan mean.
     let windowEvery = '';
-    if (filter === '12hour') { 
+    if (filter === '1hour') {
+        rangeQuery = '-1h';
+        windowEvery = '1m';
+        tailLimit = 240;
+    } else if (filter === '3hour') {
+        rangeQuery = '-3h';
+        windowEvery = '3m';
+        tailLimit = 240;
+    } else if (filter === '6hour') {
+        rangeQuery = '-6h';
+        windowEvery = '6m';
+        tailLimit = 240;
+    } else if (filter === '12hour') { 
         rangeQuery = '-12h';
         windowEvery = '5m';
     } else if (filter === '1day') {
@@ -188,6 +196,16 @@ app.get('/api/sensor-data', async (req, res) => {
         rangeQuery = '-180d';
         windowEvery = '24h';
     }
+
+    // tailPerFieldQuery dibangun di sini (bukan sebelum chain filter di atas)
+    // karena `tailLimit` bisa diubah oleh branch filter tersebut; string-nya
+    // harus dibangun setelah nilai final diketahui.
+    let tailPerFieldQuery = `
+        |> sort(columns: ["_time"], desc: true)
+        |> group(columns: ["_field"])
+        |> limit(n: ${tailLimit})
+        |> group()
+        |> sort(columns: ["_time"], desc: false)`;
 
     // Agregasi (jika ada) dijalankan sebelum pivot. Dua aliran digabung lewat
     // union(tables: [...]): `union` harus jadi call level-atas TANPA pipe input,
