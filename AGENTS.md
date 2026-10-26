@@ -26,13 +26,31 @@ npm run setup
 Untuk naikkan versi:
 
 ```bash
-npm run version:bump -- patch   # 1.0.0 -> 1.0.1
+npm run version:bump -- patch   # 1.0.1 -> 1.0.2
 npm run version:bump -- minor   # 1.0.0 -> 1.1.0
 npm run version:bump -- major   # 1.0.0 -> 2.0.0
 ```
 
-Setelah menaikkan versi, perbarui juga `version` di seluruh `package.json`
-agar `npm run version:check` lulus.
+Perintah ini menulis `VERSION` sekaligus menyinkronkan `version` di seluruh
+`package.json` (root, `web`, `iot-api`, `hidro-backend`) dan lockfile. Jangan
+edit versi manual.
+
+## Tag & Release otomatis
+
+- Push ke `main` yang **mengubah `VERSION`** otomatis membuat annotated tag
+  `v<versi>` + GitHub Release (catatan otomatis) lewat
+  `.github/workflows/release.yml`.
+- Push yang tidak mengubah `VERSION` hanya memberi peringatan di summary
+  Actions; tidak ada tag baru dan workflow tetap sukses.
+- Alur rilis fitur: `npm run version:bump -- patch|minor|major` -> commit dengan
+  subjek memuat `v<versi>` -> `git push origin main`.
+- Backfill/ulang Release untuk tag lama: tab **Actions** -> **Release** ->
+  **Run workflow**, isi tag (mis. `v1.0.1`). Idempotent, aman diulang.
+- Prasyarat repo: **Settings -> Actions -> General -> Workflow permissions** =
+  "Read and write", agar `GITHUB_TOKEN` bisa push tag dan membuat Release.
+- Fallback manual bila Actions tidak tersedia:
+  `git tag -a v<versi> -m "v<versi>" && git push origin v<versi>`, lalu
+  `gh release create v<versi> --generate-notes`.
 
 ## Operasi umum
 

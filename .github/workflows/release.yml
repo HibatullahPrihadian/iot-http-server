@@ -1,0 +1,117 @@
+name: Release
+
+# Tag versi + GitHub Release otomatis.
+#
+# - push ke main: kalau file VERSION berubah, buat annotated tag v<versi> lalu
+#   push tag tersebut dan buat GitHub Release dengan catatan otomatis.
+#   Push yang tidak mengubah VERSION hanya menghasilkan peringatan (tidak gagal).
+# - workflow_dispatch: backfill Release untuk tag yang sudah ada (mis. v1.0.0).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag yang sudah ada untuk dibuatkan Release (mis. v1.0.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Cek sinkronisasi versi
+        if: github.event_name == 'push'
+        run: npm run version:check
+
+      - name: Deteksi perubahan VERSION
+        if: github.event_name == 'push'
+        id: version
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --quiet "$BEFORE" "$GITHUB_SHA" -- VERSION; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Lewati rilis (VERSION tidak berubah)
+        if: github.event_name == 'push' && steps.version.outputs.changed != 'true'
+        run: |
+          echo "::warning::VERSION tidak berubah pada push ini; tidak ada tag/Release baru."
+          {
+            echo "### Rilis dilewati"
+            echo
+            echo "Tidak ada perubahan \`VERSION\` di commit \`$(git rev-parse --short HEAD)\`."
+            echo "Naikkan versi dengan \`npm run version:bump -- patch|minor|major\` bila perubahan ini perlu rilis."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Buat tag versi
+        if: github.event_name == 'push' && steps.version.outputs.changed == 'true'
+        id: tag
+        run: node scripts/release-tag.mjs --prepare
+
+      - name: Push tag
+        if: github.event_name == 'push' && steps.version.outputs.changed == 'true'
+        run: git push origin "refs/tags/${{ steps.tag.outputs.tag }}"
+
+      - name: Buat GitHub Release (push)
+        if: github.event_name == 'push' && steps.version.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            --verify-tag --generate-notes --title "${{ steps.tag.outputs.tag }}"
+          {
+            echo "### Rilis ${{ steps.tag.outputs.tag }}"
+            echo
+            echo "- Tag \`${{ steps.tag.outputs.tag }}\` dibuat dan di-push."
+            echo "- GitHub Release dibuat dengan catatan otomatis."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verifikasi tag (manual)
+        if: github.event_name == 'workflow_dispatch'
+        id: ensure
+        run: node scripts/release-tag.mjs --ensure "${{ inputs.tag }}"
+
+      - name: Buat GitHub Release (manual)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG sudah ada; tidak ada perubahan."
+            echo "- Release \`$TAG\` sudah ada (dilewati)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh release create "$TAG" --verify-tag --generate-notes --title "$TAG"
+            echo "- Release \`$TAG\` dibuat (backfill)." >> "$GITHUB_STEP_SUMMARY"
+          fi

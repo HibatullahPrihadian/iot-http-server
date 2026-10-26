@@ -84,10 +84,15 @@ yang sama; `scripts/check-version.mjs` menegakkan sinkronisasi.
   `commit-msg` (`.githooks/`). Hook dipasang lewat `git config core.hooksPath
   .githooks` (disimpan di `.git/config`, tidak ikut ter-commit) — clone baru
   menjalankan `npm run setup`.
-- Naikkan versi: `npm run version:bump -- patch|minor|major`, lalu perbarui
-  `version` di seluruh `package.json` dan jalankan `npm run version:check`.
-- Versi tampil di header UI (`v1.0.0`) dan tersedia lewat
-  `GET /api/version` pada kedua backend.
+- Naikkan versi: `npm run version:bump -- patch|minor|major` — menulis `VERSION`
+  sekaligus menyinkronkan versi di 4 `package.json` dan lockfile, lalu
+  `npm run version:check` untuk validasi.
+- **Tag + GitHub Release otomatis**: push ke `main` yang mengubah `VERSION`
+  membuat annotated tag `v<versi>` dan Release lewat
+  `.github/workflows/release.yml`. Backfill Release untuk tag lama: tab
+  **Actions** -> **Release** -> **Run workflow**.
+- Versi tampil di header UI dan tersedia lewat `GET /api/version` pada kedua
+  backend.
 
 ## Konfigurasi (env)
 
