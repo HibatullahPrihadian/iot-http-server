@@ -12,7 +12,7 @@ export default function TableSection({
   const pipes = Array.from({ length: 6 }, (_, i) => i + 1)
 
   return (
-    <section className="glass-panel p-5">
+    <section id={`meja-${tableNumber}`} className="glass-panel p-5 scroll-mt-20">
       <h2 className="text-lg font-bold text-text-hi">{title || `Meja ${tableNumber}`}</h2>
       {hint && <p className="text-xs text-text-low mt-0.5 mb-4">{hint}</p>}
       {!hint && <div className="mb-4" />}

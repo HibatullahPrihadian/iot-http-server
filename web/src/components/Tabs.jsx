@@ -1,10 +1,11 @@
-import { LayoutDashboard, History, BarChart3, Sprout } from 'lucide-react'
+import { LayoutDashboard, History, BarChart3, Sprout, Droplets } from 'lucide-react'
 
 const TABS = [
   { key: 'dashboard', label: 'Dashboard', Icon: LayoutDashboard },
   { key: 'history', label: 'Riwayat', Icon: History },
   { key: 'stats', label: 'Statistik', Icon: BarChart3 },
   { key: 'catalog', label: 'Katalog', Icon: Sprout },
+  { key: 'tank', label: 'Tangki', Icon: Droplets },
 ]
 
 export function Tabs({ active, onChange }) {
@@ -47,7 +48,7 @@ export function BottomTabs({ active, onChange }) {
               type="button"
               onClick={() => onChange(t.key)}
               aria-current={isActive ? 'page' : undefined}
-              className={`flex flex-1 flex-col items-center justify-center gap-1 py-2.5 text-[11px] font-semibold
+              className={`flex flex-1 flex-col items-center justify-center gap-1 py-2.5 text-[10px] font-semibold
                 transition active:scale-[0.97]
                 ${isActive ? 'text-ios-blue' : 'text-text-low'}`}
             >

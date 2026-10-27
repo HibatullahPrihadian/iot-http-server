@@ -5,6 +5,7 @@ import { APP_VERSION } from './version.js'
 import TableSection from './components/TableSection.jsx'
 import PlantModal from './components/PlantModal.jsx'
 import LegendBar from './components/LegendBar.jsx'
+import PlanSummary from './components/PlanSummary.jsx'
 import { Tabs, BottomTabs } from './components/Tabs.jsx'
 import HarvestBanner from './components/HarvestBanner.jsx'
 import HistoryModal from './components/HistoryModal.jsx'
@@ -37,6 +38,7 @@ function PlanLayout() {
     if (location.pathname.startsWith('/plan/history')) return 'history'
     if (location.pathname.startsWith('/plan/stats')) return 'stats'
     if (location.pathname.startsWith('/plan/catalog')) return 'catalog'
+    if (location.pathname.startsWith('/plan/tank')) return 'tank'
     return 'dashboard'
   }, [location.pathname])
 
@@ -95,6 +97,13 @@ function PlanLayout() {
       )
     : false
 
+  // Scroll halus ke section meja saat kartu ringkasan diklik.
+  function handleJumpToTable(tableNumber) {
+    if (typeof document === 'undefined') return
+    const el = document.getElementById(`meja-${tableNumber}`)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   function changeTab(key) {
     if (key === 'dashboard') navigate('/plan')
     else navigate(`/plan/${key}`)
@@ -122,17 +131,16 @@ function PlanLayout() {
 
         {tab === 'dashboard' && (
           <>
+            <PlanSummary batches={batches} onJumpToTable={handleJumpToTable} />
             <HarvestBanner
               batches={batches}
               onHarvest={(b) => openPipe(b.tableNumber, b.pipeNumber)}
             />
-            <LegendBar />
 
             {loading ? (
               <p className="text-text-low">Memuat data...</p>
             ) : (
               <div className="space-y-6">
-                <TankPanel onGoCatalog={() => changeTab('catalog')} />
                 <TableSection
                   tableNumber={3}
                   title="Meja 3 · Pembibitan"
@@ -159,8 +167,12 @@ function PlanLayout() {
                 />
               </div>
             )}
+
+            <LegendBar compact />
           </>
         )}
+
+        {tab === 'tank' && <TankPanel onGoCatalog={() => changeTab('catalog')} />}
 
         {tab === 'history' && <HistoryPage catalog={catalog} />}
         {tab === 'stats' && <StatsPage />}
