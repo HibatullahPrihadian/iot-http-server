@@ -517,11 +517,16 @@ app.get('/api/relay/status', async (req, res) => {
 
     const queryApi = client.getQueryApi(org);
     
+    // Hanya field relay yang dipindai. Tanpa filter ini, `last()` membaca
+    // seluruh field (termasuk PZEM 1 Hz ~86k titik/field per hari).
     const fluxQuery = `
       from(bucket: "${bucket}")
         |> range(start: -1d)
         |> filter(fn: (r) => r["_measurement"] == "hidroponik_sensor")
+        |> filter(fn: (r) => r["_field"] == "relay_1" or r["_field"] == "relay_2" or r["_field"] == "relay_3" or r["_field"] == "relay_4")
+        |> group(columns: ["_field"])
         |> last()
+        |> group()
         |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
     `;
     
