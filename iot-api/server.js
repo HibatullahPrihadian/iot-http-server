@@ -17,6 +17,31 @@ const org = 'hidroponik';
 const bucket = 'sensor_data';
 const measurement = 'hidroponik_sensor';
 
+// --- FIELD PER DOMAIN ---
+// PZEM-004T (listrik) mengirim ~1 Hz -> satu field listrik punya ~21.000 titik
+// per 6 jam, sedangkan sensor hidroponik hanya ~1 titik/menit (~300 titik/6 jam).
+// Query lama memakai `_field != "energi"` sehingga dashboard hidroponik ikut
+// memindai seluruh field listrik (ratusan ribu baris) -> respons 1-8 detik dan
+// InfluxDB kehabisan CPU. Sekarang tiap domain hanya memindai field yang dipakai.
+const HYDRO_FIELDS = ['suhu_udara', 'kelembapan_udara', 'kadar_tds', 'kadar_ph', 'intensitas_uv', 'suhu_air'];
+const LISTRIK_FIELDS = ['tegangan', 'arus', 'daya', 'energi', 'frekuensi', 'power_factor'];
+
+// Filter Flux: r["_field"] == "a" or r["_field"] == "b" ...
+function fluxFieldFilter(fields) {
+    return fields.map((f) => `r["_field"] == "${f}"`).join(' or ');
+}
+
+// --- CACHE ---
+// Cache respons singkat + single-flight: beberapa tab/HP membuka dashboard yang
+// sama, jadi query InfluxDB yang mahal tidak perlu dijalankan tiap poll dan
+// permintaan identik tidak menumpuk saat server lambat.
+const SENSOR_CACHE_TTL_MS = Number(process.env.SENSOR_CACHE_TTL_MS) || 2500;
+const SENSOR_CACHE_TTL_HISTORY_MS = Number(process.env.SENSOR_CACHE_TTL_HISTORY_MS) || 30000;
+const ENERGY_CACHE_TTL_MS = Number(process.env.ENERGY_CACHE_TTL_MS) || 60000;
+const sensorCache = new Map();     // key -> { at, payload }
+const sensorInflight = new Map();  // key -> Promise<payload>
+const energyCache = new Map();     // rangeQuery -> { at, value }
+
 // --- TOKEN PERANGKAT (X-Device-Token) ---
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN || '';
 
@@ -79,7 +104,16 @@ function deviceAuth(req, res, next) {
 // (tanpa downsampling/limit chart). Memakai difference(nonNegative:true) |> sum()
 // sehingga kenaikan terjumlah dan reset (nilai turun) diabaikan -> reset-safe.
 // Mengembalikan { period, from, to } atau { period: null } bila data < 2 titik.
+//
+// Hasil di-cache: angka kWh kumulatif berubah lambat, sedangkan query ini
+// memindai seluruh titik `energi` (~1 Hz) pada rentang yang diminta. Tanpa cache,
+// dashboard Listrik yang polling tiap detik menembak InfluxDB terus-menerus.
 async function hitungEnergiPeriode(rangeQuery) {
+    const cached = energyCache.get(rangeQuery);
+    if (cached && Date.now() - cached.at < ENERGY_CACHE_TTL_MS) {
+        return cached.value;
+    }
+
     const queryApi = client.getQueryApi(org);
     const base = `
         from(bucket: "${bucket}")
@@ -113,14 +147,16 @@ async function hitungEnergiPeriode(rangeQuery) {
             },
             error() {
                 // Jangan gagalkan seluruh respons; energi cukup null.
-                resolve({ period: null, from: null, to: null });
+                const value = { period: null, from: null, to: null };
+                energyCache.set(rangeQuery, { at: Date.now(), value });
+                resolve(value);
             },
             complete() {
-                if (total === null || count < 3) {
-                    resolve({ period: null, from: first, to: last });
-                } else {
-                    resolve({ period: total, from: first, to: last });
-                }
+                const value = total === null || count < 3
+                    ? { period: null, from: first, to: last }
+                    : { period: total, from: first, to: last };
+                energyCache.set(rangeQuery, { at: Date.now(), value });
+                resolve(value);
             },
         });
     });
@@ -137,89 +173,117 @@ app.get('/api/version', (req, res) => {
     res.json({ version: APP_VERSION, service: 'iot-api' });
 });
 
-// 2. Route untuk Mengambil History Data Sensor (untuk Grafik & Realtime)
-app.get('/api/sensor-data', async (req, res) => {
+// Bangun payload /api/sensor-data. Dipisah dari handler supaya bisa dipakai
+// bersama oleh cache single-flight di bawah.
+//
+// Rentang & field dipilih per domain:
+// - realtime hanya butuh titik TERBARU, jadi tidak perlu memindai 6 jam data.
+// - tiap domain hanya memindai field miliknya (HYDRO_FIELDS/LISTRIK_FIELDS).
+async function bangunDataSensor(filter, includeListrik) {
     const queryApi = client.getQueryApi(org);
-    const filter = req.query.filter || 'realtime';
-    // domain=listrik -> ikut sertakan baris yang hanya berisi data listrik (PZEM).
-    // Tanpa itu, hanya baris dengan data hidroponik yang dikembalikan agar
-    // dashboard Monitoring lama tidak kemasukan baris listrik.
-    const includeListrik = req.query.domain === 'listrik';
     
-    let rangeQuery = '-6h';
+    // Jendela data chart. `realtime` hanya perlu titik terbaru:
+    // - listrik ~1 Hz   -> 120 titik = 2 menit, jendela -10m (ada margin)
+    // - hidroponik ~1/m -> 40 titik = 40 menit, jendela -2h
+    // Filter riwayat memakai jendela sesuai namanya.
+    // `energyRange` dipisah agar kartu "pemakaian periode" pada filter realtime
+    // tetap menghitung 6 jam terakhir seperti sebelumnya.
+    let rangeQuery = includeListrik ? '-10m' : '-2h';
+    let energyRange = '-6h';
+    let windowEvery = '';
     // Batasi titik TERAKHIR per _field. Harus SEBELUM pivot: sesudah pivot
-    // _field sudah lebur jadi kolom, jadi tail/limit tak bisa grup per field
-    // (itu penyebab bug realtime kosong sebelumnya).
-    // Urutan akhir dikembalikan ASC (naik) agar konsisten dengan kontrak lama:
-    // UI mengambil titik terbaru di data[data.length-1].
-    // Listrik dikirim ~1Hz -> jendela lebih lebar (120 titik ~ 2 menit) agar
-    // chart tidak cuma ~40 detik; hidroponik tetap 40.
-    // Filter riwayat pendek (1/3/6 jam) menaikkan nilai ini di bawah, supaya
-    // bucket jendela penuh tidak ikut terpotong oleh limit.
+    // _field sudah lebur jadi kolom, jadi tail tak bisa grup per field.
+    // Listrik dikirim ~1Hz -> 120 titik (~2 menit); hidroponik 40 titik.
     let tailLimit = includeListrik ? 120 : 40;
 
     // Konfigurasi dinamis rentang waktu dan downsampling.
     // `energi` bersifat kumulatif, jadi TIDAK boleh dirata-rata (mean akan
     // merusak nilai kWh dan differensinya). Field lain di-downsample dengan mean.
-    let windowEvery = '';
     if (filter === '1hour') {
         rangeQuery = '-1h';
+        energyRange = '-1h';
         windowEvery = '1m';
         tailLimit = 240;
     } else if (filter === '3hour') {
         rangeQuery = '-3h';
+        energyRange = '-3h';
         windowEvery = '3m';
         tailLimit = 240;
     } else if (filter === '6hour') {
         rangeQuery = '-6h';
+        energyRange = '-6h';
         windowEvery = '6m';
         tailLimit = 240;
-    } else if (filter === '12hour') { 
+    } else if (filter === '12hour') {
         rangeQuery = '-12h';
+        energyRange = '-12h';
         windowEvery = '5m';
     } else if (filter === '1day') {
         rangeQuery = '-24h';
+        energyRange = '-24h';
         windowEvery = '15m';
     } else if (filter === '1week') {
         rangeQuery = '-7d';
+        energyRange = '-7d';
         windowEvery = '1h';
     } else if (filter === '2week') {
         rangeQuery = '-14d';
+        energyRange = '-14d';
         windowEvery = '2h';
     } else if (filter === '1month') {
         rangeQuery = '-30d';
+        energyRange = '-30d';
         windowEvery = '6h';
     } else if (filter === '3month') {
         rangeQuery = '-90d';
+        energyRange = '-90d';
         windowEvery = '12h';
     } else if (filter === '6month') {
         rangeQuery = '-180d';
+        energyRange = '-180d';
         windowEvery = '24h';
     }
 
-    // tailPerFieldQuery dibangun di sini (bukan sebelum chain filter di atas)
-    // karena `tailLimit` bisa diubah oleh branch filter tersebut; string-nya
-    // harus dibangun setelah nilai final diketahui.
-    let tailPerFieldQuery = `
-        |> sort(columns: ["_time"], desc: true)
+    const meanAgg = windowEvery ? `|> aggregateWindow(every: ${windowEvery}, fn: mean, createEmpty: false)` : '';
+    const lastAgg = windowEvery ? `|> aggregateWindow(every: ${windowEvery}, fn: last, createEmpty: false)` : '';
+
+    // Hanya field milik domain ini yang dipindai (bukan seluruh measurement).
+    const fields = includeListrik ? LISTRIK_FIELDS : HYDRO_FIELDS;
+    const fieldFilter = fluxFieldFilter(fields);
+
+    // group + tail(n) mengambil n titik TERAKHIR per field tanpa mengurutkan
+    // seluruh hasil (sort global inilah yang mahal pada data 1 Hz).
+    // Urutan akhir ASC agar kontrak lama tetap: UI memakai data[data.length-1].
+    const tailPerFieldQuery = `
         |> group(columns: ["_field"])
-        |> limit(n: ${tailLimit})
+        |> tail(n: ${tailLimit})
         |> group()
         |> sort(columns: ["_time"], desc: false)`;
 
-    // Agregasi (jika ada) dijalankan sebelum pivot. Dua aliran digabung lewat
-    // union(tables: [...]): `union` harus jadi call level-atas TANPA pipe input,
-    // jadi kedua aliran ditulis penuh di dalam array (bukan `... |> union(...)`).
-    // - field non-energi: aggregateWindow(mean) sesuai jendela
-    // - field energi: aggregateWindow(last) agar nilai kumulatif utuh
-    const meanAgg = windowEvery ? `|> aggregateWindow(every: ${windowEvery}, fn: mean, createEmpty: false)` : '';
-    const lastAgg = windowEvery ? `|> aggregateWindow(every: ${windowEvery}, fn: last, createEmpty: false)` : '';
-    const fluxQuery = `
+    const pivotQuery = `
+        ${tailPerFieldQuery}
+        |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")`;
+
+    // Realtime (tanpa downsampling) cukup satu aliran.
+    // Riwayat domain listrik butuh union: `energi` memakai aggregateWindow(last)
+    // agar nilai kumulatif utuh, field lain aggregateWindow(mean).
+    let fluxQuery;
+    if (!windowEvery) {
+        fluxQuery = `
+        from(bucket: "${bucket}")
+          |> range(start: ${rangeQuery})
+          |> filter(fn: (r) => r["_measurement"] == "hidroponik_sensor")
+          |> filter(fn: (r) => ${fieldFilter})
+          ${pivotQuery}
+    `;
+    } else if (includeListrik) {
+        const nonEnergiFilter = fluxFieldFilter(fields.filter((f) => f !== 'energi'));
+        fluxQuery = `
       union(tables: [
         from(bucket: "${bucket}")
           |> range(start: ${rangeQuery})
           |> filter(fn: (r) => r["_measurement"] == "hidroponik_sensor")
-          |> filter(fn: (r) => r["_field"] != "energi")
+          |> filter(fn: (r) => ${nonEnergiFilter})
           ${meanAgg},
         from(bucket: "${bucket}")
           |> range(start: ${rangeQuery})
@@ -227,9 +291,18 @@ app.get('/api/sensor-data', async (req, res) => {
           |> filter(fn: (r) => r["_field"] == "energi")
           ${lastAgg}
       ])
-        ${tailPerFieldQuery}
-        |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+        ${pivotQuery}
     `;
+    } else {
+        fluxQuery = `
+        from(bucket: "${bucket}")
+          |> range(start: ${rangeQuery})
+          |> filter(fn: (r) => r["_measurement"] == "hidroponik_sensor")
+          |> filter(fn: (r) => ${fieldFilter})
+          ${meanAgg}
+          ${pivotQuery}
+    `;
+    }
     
     let dataSensor = [];
     try {
@@ -291,7 +364,7 @@ app.get('/api/sensor-data', async (req, res) => {
         let energyFrom = null;
         let energyTo = null;
         if (includeListrik) {
-            const e = await hitungEnergiPeriode(rangeQuery);
+            const e = await hitungEnergiPeriode(energyRange);
             energyPeriod = e.period;
             energyFrom = e.from;
             energyTo = e.to;
@@ -303,6 +376,41 @@ app.get('/api/sensor-data', async (req, res) => {
             payload.energyFrom = energyFrom;
             payload.energyTo = energyTo;
         }
+        return payload;
+    } catch (error) {
+        // Diteruskan ke handler agar respons tetap 500 dengan pesan error.
+        throw error;
+    }
+}
+
+// Route data sensor (grafik & realtime).
+// Cache singkat + single-flight: dashboard yang sama dibuka di beberapa tab/HP
+// tidak menjalankan query InfluxDB yang sama berkali-kali, dan permintaan yang
+// datang saat query masih berjalan memakai promise yang sama (tidak menumpuk).
+app.get('/api/sensor-data', async (req, res) => {
+    const filter = req.query.filter || 'realtime';
+    // domain=listrik -> hanya baris/field listrik (PZEM-004T). Tanpa itu hanya
+    // baris hidroponik agar dashboard Monitoring tidak kemasukan baris listrik.
+    const includeListrik = req.query.domain === 'listrik';
+    const cacheKey = `${filter}|${includeListrik ? 'listrik' : 'hidro'}`;
+
+    const ttl = filter === 'realtime' ? SENSOR_CACHE_TTL_MS : SENSOR_CACHE_TTL_HISTORY_MS;
+    const cached = sensorCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < ttl) {
+        return res.json(cached.payload);
+    }
+
+    let job = sensorInflight.get(cacheKey);
+    if (!job) {
+        job = bangunDataSensor(filter, includeListrik);
+        sensorInflight.set(cacheKey, job);
+        const clear = () => sensorInflight.delete(cacheKey);
+        job.then(clear, clear);
+    }
+
+    try {
+        const payload = await job;
+        sensorCache.set(cacheKey, { at: Date.now(), payload });
         res.json(payload);
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });

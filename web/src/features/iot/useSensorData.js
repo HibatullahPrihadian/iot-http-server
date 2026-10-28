@@ -5,15 +5,21 @@ const POLL_MS = 5000
 
 // Polling data sensor + status relay tiap POLL_MS (default 5 detik).
 // domain='listrik' -> pakai endpoint listrik (ikut sertakan baris data PZEM saja).
-// pollMs -> override interval polling per pemakaian (mis. Listrik 1000 ms).
+// pollMs -> override interval polling per pemakaian (mis. Listrik 2000 ms).
 export function useSensorData({ filter = 'realtime', enabled = true, domain = 'hidroponik', pollMs = POLL_MS } = {}) {
   const [data, setData] = useState([])
   const [energy, setEnergy] = useState({ period: null, from: null, to: null })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const timer = useRef(null)
+  // Filter yang request-nya masih berjalan. Poll berikutnya dilewati agar
+  // request tidak menumpuk saat server/jaringan lambat (penyebab halaman
+  // terasa berat dan request saling menyusul).
+  const inFlight = useRef(null)
 
   const fetchData = useCallback(async (currentFilter) => {
+    if (inFlight.current === currentFilter) return
+    inFlight.current = currentFilter
     try {
       const fetchFn = domain === 'listrik' ? getPzemData : getSensorData
       const res = await fetchFn(currentFilter)
@@ -33,6 +39,7 @@ export function useSensorData({ filter = 'realtime', enabled = true, domain = 'h
     } catch (err) {
       setError(err.message)
     } finally {
+      inFlight.current = null
       setLoading(false)
     }
   }, [domain])

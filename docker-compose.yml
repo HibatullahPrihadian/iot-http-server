@@ -45,7 +45,9 @@ services:
       UPLOAD_DIR: /app/data/uploads
       CORS_ORIGIN: ${CORS_ORIGIN:-}
       TZ: Asia/Jakarta
-      IOT_API_URL: ${IOT_API_URL:-https://hidroponik.phd.my.id/api/sensor-data?filter=realtime}
+      # Panggil iot-api lewat jaringan Docker (bukan URL publik): menghindari
+      # hairpin keluar ke Cloudflare lalu balik lagi (~1 detik per request).
+      IOT_API_URL: ${IOT_API_URL:-http://iot-api:3000/api/sensor-data?filter=realtime}
       IOT_API_KEY: ${IOT_API_KEY:-}
       IOT_TIMEOUT_MS: ${IOT_TIMEOUT_MS:-5000}
     volumes:

@@ -73,7 +73,10 @@ export default function ListrikPage() {
     const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(TARIFF_STORAGE_KEY) : null
     return saved !== null ? saved : String(DEFAULT_TARIFF)
   })
-  const { data, loading, error, energy } = useSensorData({ filter, domain: 'listrik', pollMs: 1000 })
+  // Data PZEM dikirim ~1 Hz, tapi query InfluxDB-nya berat: poll 1 detik
+  // membuat request saling menyusul. 2 detik + anti-pileup di useSensorData
+  // membuat dashboard tetap terasa realtime tanpa membebani server.
+  const { data, loading, error, energy } = useSensorData({ filter, domain: 'listrik', pollMs: 2000 })
 
   const latest = data.length ? data[data.length - 1] : null
   const online = isOnline(latest?.waktu)
