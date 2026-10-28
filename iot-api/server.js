@@ -306,6 +306,10 @@ async function bangunDataSensor(filter, includeListrik) {
     
     let dataSensor = [];
     try {
+        // Query energi periode dijalankan PARALEL dengan query chart (bukan
+        // berurutan) agar request pertama tidak menunggu dua kali.
+        const energyPromise = includeListrik ? hitungEnergiPeriode(energyRange) : null;
+
         await new Promise((resolve, reject) => {
             // FUNGSI BANTUAN UNTUK MEMBULATKAN DESIMAL
             const bulatkan = (nilai, jumlahDesimal) => {
@@ -364,7 +368,7 @@ async function bangunDataSensor(filter, includeListrik) {
         let energyFrom = null;
         let energyTo = null;
         if (includeListrik) {
-            const e = await hitungEnergiPeriode(energyRange);
+            const e = await energyPromise;
             energyPeriod = e.period;
             energyFrom = e.from;
             energyTo = e.to;
