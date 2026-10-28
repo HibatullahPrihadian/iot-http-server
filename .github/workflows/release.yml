@@ -74,6 +74,13 @@ jobs:
             echo "Naikkan versi dengan \`npm run version:bump -- patch|minor|major\` bila perubahan ini perlu rilis."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Konfigurasi identitas git
+        if: github.event_name == 'push' && steps.version.outputs.changed == 'true'
+        run: |
+          # Annotated tag butuh identitas committer; runner GitHub tidak punya.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Buat tag versi
         if: github.event_name == 'push' && steps.version.outputs.changed == 'true'
         id: tag
