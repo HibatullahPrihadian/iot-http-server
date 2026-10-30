@@ -173,9 +173,23 @@ app.get('/api/version', (req, res) => {
     res.json({ version: APP_VERSION, service: 'iot-api' });
 });
 
+// Ambil payload terbaru, simpan ke cache, dan dedupe permintaan bersamaan.
+function refreshSensorData(cacheKey, filter, includeListrik) {
+    let job = sensorInflight.get(cacheKey);
+    if (!job) {
+        job = bangunDataSensor(filter, includeListrik)
+            .then((payload) => {
+                sensorCache.set(cacheKey, { at: Date.now(), payload });
+                return payload;
+            })
+            .finally(() => sensorInflight.delete(cacheKey));
+        sensorInflight.set(cacheKey, job);
+    }
+    return job;
+}
+
 // Bangun payload /api/sensor-data. Dipisah dari handler supaya bisa dipakai
 // bersama oleh cache single-flight di bawah.
-//
 // Rentang & field dipilih per domain:
 // - realtime hanya butuh titik TERBARU, jadi tidak perlu memindai 6 jam data.
 // - tiap domain hanya memindai field miliknya (HYDRO_FIELDS/LISTRIK_FIELDS).
@@ -183,12 +197,12 @@ async function bangunDataSensor(filter, includeListrik) {
     const queryApi = client.getQueryApi(org);
     
     // Jendela data chart. `realtime` hanya perlu titik terbaru:
-    // - listrik ~1 Hz   -> 120 titik = 2 menit, jendela -10m (ada margin)
+    // - listrik ~1 Hz   -> 120 titik = 2 menit, jendela -3m (ada margin)
     // - hidroponik ~1/m -> 40 titik = 40 menit, jendela -2h
     // Filter riwayat memakai jendela sesuai namanya.
     // `energyRange` dipisah agar kartu "pemakaian periode" pada filter realtime
     // tetap menghitung 6 jam terakhir seperti sebelumnya.
-    let rangeQuery = includeListrik ? '-10m' : '-2h';
+    let rangeQuery = includeListrik ? '-3m' : '-2h';
     let energyRange = '-6h';
     let windowEvery = '';
     // Batasi titik TERAKHIR per _field. Harus SEBELUM pivot: sesudah pivot
@@ -388,34 +402,33 @@ async function bangunDataSensor(filter, includeListrik) {
 }
 
 // Route data sensor (grafik & realtime).
-// Cache singkat + single-flight: dashboard yang sama dibuka di beberapa tab/HP
-// tidak menjalankan query InfluxDB yang sama berkali-kali, dan permintaan yang
-// datang saat query masih berjalan memakai promise yang sama (tidak menumpuk).
+// Pola stale-while-revalidate:
+// - data masih segar (umur < TTL)   -> langsung dari cache
+// - data kedaluwarsa tapi ada cache -> kirim cache SEKARANG, query diperbarui
+//   di latar belakang (pengguna tidak pernah menunggu query InfluxDB)
+// - belum ada cache (request pertama) -> tunggu query
+// Single-flight: permintaan yang datang saat query masih berjalan memakai
+// promise yang sama, jadi tidak ada penumpukan query.
 app.get('/api/sensor-data', async (req, res) => {
     const filter = req.query.filter || 'realtime';
     // domain=listrik -> hanya baris/field listrik (PZEM-004T). Tanpa itu hanya
     // baris hidroponik agar dashboard Monitoring tidak kemasukan baris listrik.
     const includeListrik = req.query.domain === 'listrik';
     const cacheKey = `${filter}|${includeListrik ? 'listrik' : 'hidro'}`;
-
     const ttl = filter === 'realtime' ? SENSOR_CACHE_TTL_MS : SENSOR_CACHE_TTL_HISTORY_MS;
+
     const cached = sensorCache.get(cacheKey);
     if (cached && Date.now() - cached.at < ttl) {
         return res.json(cached.payload);
     }
-
-    let job = sensorInflight.get(cacheKey);
-    if (!job) {
-        job = bangunDataSensor(filter, includeListrik);
-        sensorInflight.set(cacheKey, job);
-        const clear = () => sensorInflight.delete(cacheKey);
-        job.then(clear, clear);
+    if (cached) {
+        // Kedaluwarsa: sajikan yang lama, perbarui di latar belakang.
+        refreshSensorData(cacheKey, filter, includeListrik).catch(() => {});
+        return res.json(cached.payload);
     }
 
     try {
-        const payload = await job;
-        sensorCache.set(cacheKey, { at: Date.now(), payload });
-        res.json(payload);
+        res.json(await refreshSensorData(cacheKey, filter, includeListrik));
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
