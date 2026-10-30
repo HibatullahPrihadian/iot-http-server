@@ -1,0 +1,28 @@
+<!-- Sumber ikon maskable (full-bleed, glyph di area aman sekitar 78 persen).
+     Regenerate: pwa-assets-generator dengan padding 0 dan background #121212,
+     lalu simpan hasilnya sebagai web/public/maskable-icon-512x512.png. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="mglow" cx="0.24" cy="0.16" r="0.9">
+      <stop offset="0" stop-color="#0a84ff" stop-opacity="0.4"/>
+      <stop offset="0.6" stop-color="#30d158" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="mleaf" x1="0.15" y1="0.05" x2="0.85" y2="0.95">
+      <stop offset="0" stop-color="#7cf294"/>
+      <stop offset="0.55" stop-color="#30d158"/>
+      <stop offset="1" stop-color="#1f9e42"/>
+    </linearGradient>
+    <linearGradient id="mdrop" x1="0.1" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#8cc9ff"/>
+      <stop offset="1" stop-color="#0a84ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="#121212"/>
+  <rect width="512" height="512" fill="url(#mglow)"/>
+  <g transform="translate(256 256) scale(0.78) translate(-256 -256)">
+    <path d="M 236 104 C 326 154 336 266 272 336 C 232 380 184 392 154 384 C 156 302 178 216 212 158 C 222 140 230 124 236 104 Z" fill="url(#mleaf)"/>
+    <path d="M 182 364 C 210 306 240 246 276 196" fill="none" stroke="#0b2b13" stroke-opacity="0.45" stroke-width="13" stroke-linecap="round"/>
+    <path d="M 356 244 C 356 244 402 302 402 332 A 46 46 0 0 1 310 332 C 310 302 356 244 356 244 Z" fill="url(#mdrop)"/>
+  </g>
+</svg>

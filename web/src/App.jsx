@@ -17,6 +17,12 @@ import MonitoringPage from './features/iot/MonitoringPage.jsx'
 import TrendPage from './features/iot/TrendPage.jsx'
 import ListrikPage from './features/iot/ListrikPage.jsx'
 import ListrikTrendPage from './features/iot/ListrikTrendPage.jsx'
+import {
+  usePwa,
+  OfflineBanner,
+  InstallButton,
+  UpdateBanner,
+} from './components/PwaStatus.jsx'
 
 const EMPTY_MODAL = { open: false, tableNumber: 1, pipeNumber: 1 }
 
@@ -208,6 +214,7 @@ function PlanLayout() {
 export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
+  const pwa = usePwa()
 
   const SECTIONS = [
     { key: 'monitoring', label: 'Monitoring', to: '/monitoring' },
@@ -217,6 +224,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen">
+      <OfflineBanner online={pwa.online} />
         <header className="sticky top-0 z-30 bg-surface-bg/90 backdrop-blur border-b border-white/10">
           <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-baseline gap-2">
@@ -227,6 +235,7 @@ export default function App() {
               >
                 v{APP_VERSION}
               </span>
+              <InstallButton canInstall={pwa.canInstall} onInstall={pwa.promptInstall} />
             </div>
             <nav className="flex gap-1.5">
             {SECTIONS.map((s) => {
@@ -264,6 +273,12 @@ export default function App() {
           <Route path="*" element={<Navigate to="/monitoring" replace />} />
         </Routes>
       </main>
+
+      <UpdateBanner
+        needRefresh={pwa.needRefresh}
+        onApply={pwa.applyUpdate}
+        onDismiss={pwa.dismissUpdate}
+      />
     </div>
   )
 }
