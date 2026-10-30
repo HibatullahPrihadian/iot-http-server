@@ -250,6 +250,27 @@ export function isOnline(latestWaktu) {
   return diff <= ONLINE_WINDOW_MS
 }
 
+// Label "Diperbarui" di header dashboard. Saat perangkat offline, nilai lama
+// tidak boleh tampil seolah-olah data terkini: tandai sebagai data terakhir.
+export function lastUpdateLabel(latestWaktu, networkOnline = true) {
+  if (!networkOnline) {
+    return latestWaktu
+      ? `Offline — data terakhir: ${new Date(latestWaktu).toLocaleString('id-ID')}`
+      : 'Offline — data sensor tidak tersedia'
+  }
+  return latestWaktu
+    ? `Diperbarui: ${new Date(latestWaktu).toLocaleString('id-ID')}`
+    : 'Memperbarui data...'
+}
+
+// Status koneksi yang ditampilkan di badge: gabungan status jaringan browser
+// dan kesegaran data terakhir.
+export function connectionState(latestWaktu, networkOnline = true) {
+  if (!networkOnline) return 'offline'
+  if (!latestWaktu) return 'connecting'
+  return isOnline(latestWaktu) ? 'online' : 'offline'
+}
+
 // Garis batas annotation per sensor (port dari index.html baris 480-491).
 const BORDER_STYLE = {
   borderColor: 'rgba(255, 69, 58, 0.6)',

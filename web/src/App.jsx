@@ -19,6 +19,7 @@ import ListrikPage from './features/iot/ListrikPage.jsx'
 import ListrikTrendPage from './features/iot/ListrikTrendPage.jsx'
 import {
   usePwa,
+  PwaProvider,
   OfflineBanner,
   InstallButton,
   UpdateBanner,
@@ -223,8 +224,9 @@ export default function App() {
   ]
 
   return (
-    <div className="min-h-screen">
-      <OfflineBanner online={pwa.online} />
+    <PwaProvider value={pwa}>
+      <div className="min-h-screen">
+        <OfflineBanner online={pwa.online} />
         <header className="sticky top-0 z-30 bg-surface-bg/90 backdrop-blur border-b border-white/10">
           <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-baseline gap-2">
@@ -279,6 +281,7 @@ export default function App() {
         onApply={pwa.applyUpdate}
         onDismiss={pwa.dismissUpdate}
       />
-    </div>
+      </div>
+    </PwaProvider>
   )
 }

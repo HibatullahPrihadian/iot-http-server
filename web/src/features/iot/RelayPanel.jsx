@@ -1,12 +1,16 @@
 import { useState } from 'react'
 import { kontrolRelay } from './api.js'
 import { useToast } from './Toast.jsx'
+import { usePwaStatus } from '../../components/PwaStatus.jsx'
 import { useRelayStatus } from './useSensorData.js'
 
 // Panel 4 relay: tombol toggle ON/OFF + sinkron status dari InfluxDB.
 export default function RelayPanel() {
   const toast = useToast()
-  const { relays, setRelay } = useRelayStatus()
+  const { online } = usePwaStatus()
+  // Saat offline polling dihentikan: request pasti gagal dan status relay
+  // hanya akan menampilkan nilai lama seolah masih berlaku.
+  const { relays, setRelay } = useRelayStatus({ enabled: online })
   const [busyId, setBusyId] = useState(null)
 
   async function toggle(idRelay) {
@@ -44,7 +48,8 @@ export default function RelayPanel() {
                 <button
                   type="button"
                   onClick={() => toggle(id)}
-                  disabled={busyId === id}
+                  disabled={busyId === id || !online}
+                  title={online ? undefined : 'Offline — perintah tidak dapat dikirim'}
                   className={`btn-ios w-full py-3 text-white disabled:opacity-60 ${
                     on ? 'bg-ios-green hover:shadow-glow-green' : 'bg-ios-blue hover:shadow-glow-blue'
                   }`}

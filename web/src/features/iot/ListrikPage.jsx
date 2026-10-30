@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useSensorData } from './useSensorData.js'
 import { useToast } from './Toast.jsx'
+import { usePwaStatus } from '../../components/PwaStatus.jsx'
 import PzemChart from './PzemChart.jsx'
 import PzemTable from './PzemTable.jsx'
-import { isOnline, FILTERS, timeLabel } from './utils.js'
+import { connectionState, lastUpdateLabel, FILTERS, timeLabel } from './utils.js'
 import {
   PZEM_METRICS,
   PZEM_ORDER,
@@ -67,6 +68,7 @@ function PzemCard({ metricKey, row, onOpenTrend }) {
 export default function ListrikPage() {
   const navigate = useNavigate()
   const toast = useToast()
+  const { online: networkOnline } = usePwaStatus()
   const now = useClock()
   const [filter, setFilter] = useState('realtime')
   const [tariffInput, setTariffInput] = useState(() => {
@@ -76,10 +78,16 @@ export default function ListrikPage() {
   // Data PZEM dikirim ~1 Hz, tapi query InfluxDB-nya berat: poll 1 detik
   // membuat request saling menyusul. 2 detik + anti-pileup di useSensorData
   // membuat dashboard tetap terasa realtime tanpa membebani server.
-  const { data, loading, error, energy } = useSensorData({ filter, domain: 'listrik', pollMs: 2000 })
+  const { data, loading, error, energy } = useSensorData({
+    filter,
+    domain: 'listrik',
+    pollMs: 2000,
+    enabled: networkOnline,
+  })
 
   const latest = data.length ? data[data.length - 1] : null
-  const online = isOnline(latest?.waktu)
+  const status = connectionState(latest?.waktu, networkOnline)
+  const online = status === 'online'
   const labels = data.map((row) => timeLabel(row.waktu))
 
   const tariff = parseTariff(tariffInput)
@@ -121,9 +129,7 @@ export default function ListrikPage() {
           </div>
         </div>
         <div className="text-[13px] text-text-low mt-4">
-          {latest
-            ? `Diperbarui: ${new Date(latest.waktu).toLocaleString('id-ID')}`
-            : 'Memperbarui data...'}
+          {lastUpdateLabel(latest?.waktu, networkOnline)}
         </div>
         <div className="mt-4">
           <span
@@ -134,7 +140,7 @@ export default function ListrikPage() {
                   : 'bg-[rgba(255,69,58,0.2)] text-ios-red border border-ios-red [box-shadow:0_0_10px_rgba(255,69,58,0.3)]'
               }`}
           >
-            {latest ? (online ? 'Online' : 'Offline') : 'Menghubungkan...'}
+            {status === 'connecting' ? 'Menghubungkan...' : online ? 'Online' : 'Offline'}
           </span>
         </div>
 

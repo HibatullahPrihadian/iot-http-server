@@ -1,6 +1,6 @@
-<!-- Ikon sumber PWA. Regenerate PNG/ICO dengan @vite-pwa/assets-generator:
-     cd web, lalu jalankan pwa-assets-generator preset minimal pada file ini.
-     Ikon maskable dibuat terpisah dari web/icons/icon-maskable.svg. -->
+<!-- Sumber tunggal ikon PWA (seni penuh tanpa sudut membulat; peluncur yang
+     memotongnya). Regenerate semua PNG/ICO sekaligus dari direktori web dengan
+     npx @vite-pwa/assets-generator. Konfigurasi ada di web/pwa-assets.config.mjs. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Monitor Hidroponik">
   <title>Monitor Hidroponik</title>
   <defs>
@@ -23,8 +23,8 @@
       <stop offset="1" stop-color="#0a84ff"/>
     </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <rect width="512" height="512" rx="112" fill="url(#glow)"/>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <rect width="512" height="512" fill="url(#glow)"/>
   <path d="M 236 104 C 326 154 336 266 272 336 C 232 380 184 392 154 384 C 156 302 178 216 212 158 C 222 140 230 124 236 104 Z" fill="url(#leaf)"/>
   <path d="M 182 364 C 210 306 240 246 276 196" fill="none" stroke="#0b2b13" stroke-opacity="0.45" stroke-width="13" stroke-linecap="round"/>
   <path d="M 356 244 C 356 244 402 302 402 332 A 46 46 0 0 1 310 332 C 310 302 356 244 356 244 Z" fill="url(#drop)"/>

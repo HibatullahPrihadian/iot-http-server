@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
 import { Download, RefreshCw, WifiOff } from 'lucide-react'
 import { useToast } from '../features/iot/Toast.jsx'
@@ -29,6 +29,21 @@ function isStandalone() {
   )
 }
 
+// Status PWA dibagikan ke seluruh halaman supaya badge koneksi di dalam
+// dashboard tidak bertentangan dengan banner offline.
+const PwaStatusContext = createContext(null)
+
+export function PwaProvider({ value, children }) {
+  return <PwaStatusContext.Provider value={value}>{children}</PwaStatusContext.Provider>
+}
+
+export function usePwaStatus() {
+  const ctx = useContext(PwaStatusContext)
+  // Fallback aman bila komponen dipakai di luar App (mis. test/storybook).
+  if (ctx) return ctx
+  return { online: typeof navigator === 'undefined' ? true : navigator.onLine }
+}
+
 // Status PWA: ketersediaan update, tombol install, dan status jaringan.
 export function usePwa() {
   const { offlineReady, needRefresh, updateServiceWorker } = useRegisterSW({ immediate: true })
@@ -36,10 +51,10 @@ export function usePwa() {
 
   const [installPrompt, setInstallPrompt] = useState(deferredPrompt)
   const [installed, setInstalled] = useState(isStandalone)
+  const [installing, setInstalling] = useState(false)
   const [online, setOnline] = useState(() =>
     typeof navigator === 'undefined' ? true : navigator.onLine
   )
-  const [dismissedUpdate, setDismissedUpdate] = useState(false)
   const offlineNotified = useRef(false)
 
   useEffect(() => {
@@ -75,21 +90,28 @@ export function usePwa() {
     toast.success('Aplikasi siap dipakai offline.')
   }, [offlineReady, toast])
 
-  // Setelah update dipasang (needRefresh kembali false), izinkan prompt lagi
-  // untuk rilis berikutnya.
-  useEffect(() => {
-    if (!needRefresh[0]) setDismissedUpdate(false)
-  }, [needRefresh])
-
+  // `beforeinstallprompt` hanya boleh di-prompt sekali. Kunci selama dialog
+  // terbuka agar klik ganda tidak memicu InvalidStateError, dan selalu lepas
+  // prompt-nya di akhir supaya tombol tidak tertinggal dalam keadaan error.
+  // Ref dipakai (bukan hanya state) karena dua klik bisa terjadi dalam satu
+  // tick sebelum React sempat re-render.
+  const installBusy = useRef(false)
   const promptInstall = useCallback(async () => {
-    if (!installPrompt) return
-    installPrompt.prompt()
-    const choice = await installPrompt.userChoice
-    if (choice?.outcome === 'accepted') setInstalled(true)
-    publishPrompt(null)
+    if (!installPrompt || installBusy.current) return
+    installBusy.current = true
+    setInstalling(true)
+    try {
+      installPrompt.prompt()
+      const choice = await installPrompt.userChoice
+      if (choice?.outcome === 'accepted') setInstalled(true)
+    } catch {
+      // Prompt ditolak/diabaikan browser: tombol install disembunyikan saja.
+    } finally {
+      publishPrompt(null)
+      installBusy.current = false
+      setInstalling(false)
+    }
   }, [installPrompt])
-
-  const needRefreshValue = needRefresh[0] && !dismissedUpdate
 
   const applyUpdate = useCallback(() => {
     updateServiceWorker(true)
@@ -97,10 +119,13 @@ export function usePwa() {
 
   return {
     online,
-    needRefresh: needRefreshValue,
+    // `needRefresh` dari plugin hanya kembali false setelah reload, jadi
+    // "Nanti" memakai setter-nya sendiri: rilis berikutnya tetap memunculkan
+    // banner lagi tanpa harus reload halaman.
+    needRefresh: needRefresh[0],
     applyUpdate,
-    dismissUpdate: () => setDismissedUpdate(true),
-    canInstall: Boolean(installPrompt) && !installed,
+    dismissUpdate: () => needRefresh[1](false),
+    canInstall: Boolean(installPrompt) && !installed && !installing,
     promptInstall,
   }
 }
@@ -117,7 +142,8 @@ export function OfflineBanner({ online }) {
       <div className="mx-auto flex max-w-7xl items-center gap-2">
         <WifiOff size={14} aria-hidden="true" className="shrink-0" />
         <span>
-          Offline — tampilan aplikasi tetap terbuka, tapi data sensor dan perintah tidak tersedia.
+          Offline — aplikasi tetap terbuka, tapi data sensor tidak diperbarui dan perintah tidak
+          dapat dikirim.
         </span>
       </div>
     </div>

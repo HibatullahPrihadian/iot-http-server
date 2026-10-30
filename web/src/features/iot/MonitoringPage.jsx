@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useSensorData } from './useSensorData.js'
 import { useToast } from './Toast.jsx'
+import { usePwaStatus } from '../../components/PwaStatus.jsx'
 import SummaryCard from './SummaryCard.jsx'
 import SensorChart from './SensorChart.jsx'
 import ActuatorPanel from './ActuatorPanel.jsx'
@@ -12,8 +13,9 @@ import {
   SENSORS,
   SENSOR_ORDER,
   alertCardClass,
+  connectionState,
   downloadSensorCSV,
-  isOnline,
+  lastUpdateLabel,
   sensorValue,
   timeLabel,
 } from './utils.js'
@@ -32,12 +34,16 @@ function useClock() {
 export default function MonitoringPage() {
   const navigate = useNavigate()
   const toast = useToast()
+  const { online: networkOnline } = usePwaStatus()
   const now = useClock()
   const [filter, setFilter] = useState('realtime')
-  const { data, loading, error } = useSensorData({ filter })
+  // Saat offline, polling dihentikan: request pasti gagal dan hanya membuat
+  // status "Online" dari data lama menyesatkan.
+  const { data, loading, error } = useSensorData({ filter, enabled: networkOnline })
 
   const latest = data.length ? data[data.length - 1] : null
-  const online = isOnline(latest?.waktu)
+  const status = connectionState(latest?.waktu, networkOnline)
+  const online = status === 'online'
   const labels = data.map((row) => timeLabel(row.waktu))
 
   function handleExport() {
@@ -67,9 +73,7 @@ export default function MonitoringPage() {
           </div>
         </div>
         <div className="text-[13px] text-text-low mt-4">
-          {latest
-            ? `Diperbarui: ${new Date(latest.waktu).toLocaleString('id-ID')}`
-            : 'Memperbarui data...'}
+          {lastUpdateLabel(latest?.waktu, networkOnline)}
         </div>
         <div className="mt-4">
           <span
@@ -80,7 +84,7 @@ export default function MonitoringPage() {
                   : 'bg-[rgba(255,69,58,0.2)] text-ios-red border border-ios-red [box-shadow:0_0_10px_rgba(255,69,58,0.3)]'
               }`}
           >
-            {latest ? (online ? 'Online' : 'Offline') : 'Menghubungkan...'}
+            {status === 'connecting' ? 'Menghubungkan...' : online ? 'Online' : 'Offline'}
           </span>
         </div>
 

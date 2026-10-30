@@ -45,7 +45,12 @@ export function useSensorData({ filter = 'realtime', enabled = true, domain = 'h
   }, [domain])
 
   useEffect(() => {
-    if (!enabled) return undefined
+    if (!enabled) {
+      // Offline/polling dimatikan: jangan biarkan skeleton "memuat" selamanya,
+      // tapi juga jangan hapus data terakhir (dipakai sebagai penanda basi).
+      setLoading(false)
+      return undefined
+    }
     setLoading(true)
     fetchData(filter)
     timer.current = setInterval(() => fetchData(filter), pollMs)
