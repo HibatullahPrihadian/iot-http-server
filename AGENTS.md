@@ -60,6 +60,26 @@ npm run test:hidro       # self-check backend Plan (HSS/HST)
 npm run version:check    # validasi sinkronisasi versi
 ```
 
+### Deploy: rebuild SEMUA service yang menampilkan versi
+
+Versi di badge UI **di-bake saat build** (`__APP_VERSION__` di-inject Vite dari
+`web/package.json`), jadi image lama akan terus menampilkan versi lama walau
+kode sudah di-pull. Setelah `version:bump`, rebuild ketiga service:
+
+```bash
+docker compose up -d --build iot-api hidro-backend web
+```
+
+Jangan hanya rebuild `iot-api`: `hidro-backend` (`/api/version`) dan `web`
+(badge versi di UI) akan tertinggal. Verifikasi setelah deploy:
+
+```bash
+curl -s https://hidroponik.phd.my.id/api/version          # hidro-backend
+curl -s https://hidroponik.phd.my.id/api/version-iot 2>/dev/null || \
+  docker exec hidroponik-backend node -e 'fetch("http://iot-api:3000/api/version").then(r=>r.json()).then(j=>console.log(j))'
+curl -s https://hidroponik.phd.my.id/ | grep -o 'index-[A-Za-z0-9_-]*\.js'  # bundle web terbaru
+```
+
 ## Arsitektur singkat
 
 | Service | Port | Peran |
