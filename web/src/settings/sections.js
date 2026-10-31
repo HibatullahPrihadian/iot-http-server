@@ -1,4 +1,4 @@
-import { Cpu, Gauge, Settings, ShieldCheck, Sprout, Upload, Zap } from 'lucide-react'
+import { Cpu, Gauge, Settings, ShieldCheck, Sprout, Upload, Wifi, Zap } from 'lucide-react'
 
 // Satu sumber metadata sub-tab Settings: label, ikon, judul kartu, deskripsi, dan
 // kunci seksi di SETTINGS (null untuk tab yang tidak memakai draft).
@@ -43,6 +43,15 @@ export const SETTINGS_SECTIONS = [
     title: 'Perangkat',
     description:
       'Preferensi aktuator. Simpan hanya menyimpan nilai; kirim ke perangkat lewat tombol Terapkan.',
+  },
+  {
+    key: 'wifi',
+    label: 'WiFi',
+    Icon: Wifi,
+    settingKey: null,
+    title: 'WiFi Perangkat',
+    description:
+      'Ubah SSID/password WiFi ESP32 dan NodeMCU. Perangkat akan restart sesaat setelah diterapkan.',
   },
   {
     key: 'batas',

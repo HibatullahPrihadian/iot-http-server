@@ -45,6 +45,19 @@ const energyCache = new Map();     // rangeQuery -> { at, value }
 // --- TOKEN PERANGKAT (X-Device-Token) ---
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN || '';
 
+// --- KUNCI INTERNAL (dipakai hidro-backend untuk endpoint admin perangkat) ---
+const IOT_INTERNAL_KEY = process.env.IOT_INTERNAL_KEY || '';
+
+// --- STATUS PERANGKAT (IN-MEMORY) ---
+// Dilaporkan perangkat lewat POST /api/device/status. Key: `<deviceId>:<role>`.
+// Hilang saat container restart; UI menampilkan "tidak diketahui" bila basi.
+const DEVICE_STATUS_TTL_MS = 5 * 60 * 1000;
+const deviceStatus = new Map(); // key -> { ...status, at }
+
+function deviceStatusKey(deviceId, role) {
+    return `${deviceId || 'utama'}:${role || 'esp32'}`;
+}
+
 // --- ANTREAN PERINTAH (IN-MEMORY) ---
 // Single instance. Antrean hilang saat container restart (perintah yang belum di-ACK).
 const MAX_QUEUE = 100;
@@ -96,6 +109,17 @@ function deviceAuth(req, res, next) {
     }
     if (req.get('X-Device-Token') !== DEVICE_TOKEN) {
         return res.status(401).json({ success: false, message: 'Token perangkat tidak valid.' });
+    }
+    next();
+}
+
+// Middleware internal: hanya hidro-backend (X-Internal-Key) yang boleh enqueue config.
+function internalAuth(req, res, next) {
+    if (!IOT_INTERNAL_KEY) {
+        return res.status(503).json({ success: false, message: 'IOT_INTERNAL_KEY belum dikonfigurasi di server.' });
+    }
+    if (req.get('X-Internal-Key') !== IOT_INTERNAL_KEY) {
+        return res.status(401).json({ success: false, message: 'Kunci internal tidak valid.' });
     }
     next();
 }
@@ -618,8 +642,89 @@ app.post('/api/device/relay-status', deviceAuth, (req, res) => {
     res.json({ success: true, data: relayState });
 });
 
-// 11. Route Perangkat: ingest data listrik PZEM-004T langsung ke InfluxDB.
-// Jalur ini TIDAK lewat Node-RED, sehingga data listrik tetap masuk meski flow
+// 10b. Route admin: kirim config WiFi ke perangkat (dipanggil hidro-backend).
+// Config masuk antrean perintah yang sama, jadi device menerimanya lewat polling.
+app.post('/api/device/config', internalAuth, (req, res) => {
+    const { ssid, password, revision, force } = req.body || {};
+
+    if (typeof ssid !== 'string' || ssid.trim().length < 1 || ssid.trim().length > 32) {
+        return res.status(400).json({ success: false, message: 'ssid harus 1-32 karakter.' });
+    }
+    if (password !== undefined && typeof password !== 'string') {
+        return res.status(400).json({ success: false, message: 'password harus teks.' });
+    }
+    const rev = Number(revision);
+    if (!Number.isFinite(rev) || rev < 1) {
+        return res.status(400).json({ success: false, message: 'revision harus angka >= 1.' });
+    }
+
+    const entry = enqueue({
+        type: 'wifi',
+        ssid: ssid.trim(),
+        password: password || '',
+        revision: rev,
+        force: Boolean(force),
+    });
+    res.json({ success: true, id: entry.id, message: 'Config WiFi masuk antrean perangkat.' });
+});
+
+// 10c. Route admin: minta perangkat memindai SSID sekitar.
+app.post('/api/device/config/scan', internalAuth, (req, res) => {
+    const entry = enqueue({ type: 'wifi-scan' });
+    res.json({ success: true, id: entry.id, message: 'Permintaan scan WiFi masuk antrean.' });
+});
+
+// 10d. Route Perangkat: lapor status (WiFi, revisi config, hasil scan).
+app.post('/api/device/status', deviceAuth, (req, res) => {
+    const body = req.body || {};
+    const role = body.role === 'node' ? 'node' : 'esp32';
+    const deviceId = typeof body.deviceId === 'string' && body.deviceId ? body.deviceId : 'utama';
+
+    const scan = body.scan && Array.isArray(body.scan.networks)
+        ? {
+            at: body.scan.at || new Date().toISOString(),
+            networks: body.scan.networks.slice(0, 20).map((n) => ({
+                ssid: String(n?.ssid ?? ''),
+                rssi: Number(n?.rssi) || 0,
+                secure: Boolean(n?.secure),
+            })),
+        }
+        : null;
+
+    deviceStatus.set(deviceStatusKey(deviceId, role), {
+        deviceId,
+        role,
+        firmware: body.firmware ? String(body.firmware) : '',
+        ssid: body.ssid ? String(body.ssid) : '',
+        appliedRevision: Number(body.appliedRevision) || 0,
+        pendingRevision: Number(body.pendingRevision) || 0,
+        ip: body.ip ? String(body.ip) : '',
+        rssi: Number(body.rssi) || 0,
+        linkOk: body.linkOk === undefined ? null : Boolean(body.linkOk),
+        lastError: body.lastError ? String(body.lastError) : '',
+        scan,
+        at: new Date().toISOString(),
+    });
+
+    res.json({ success: true });
+});
+
+// 10e. Route publik: status perangkat untuk menu Settings (tanpa rahasia).
+app.get('/api/device/status', (req, res) => {
+    const now = Date.now();
+    const devices = {};
+    let updatedAt = null;
+
+    for (const [key, value] of deviceStatus) {
+        const fresh = now - new Date(value.at).getTime() <= DEVICE_STATUS_TTL_MS;
+        devices[key] = fresh ? value : { ...value, stale: true };
+        if (!updatedAt || value.at > updatedAt) updatedAt = value.at;
+    }
+
+    res.json({ success: true, devices, updatedAt });
+});
+
+// 11. Route Perangkat: ingest data listrik PZEM-004T langsung ke InfluxDB.// Jalur ini TIDAK lewat Node-RED, sehingga data listrik tetap masuk meski flow
 // Node-RED belum diperbarui. Ditulis ke `_measurement` yang sama
 // (hidroponik_sensor) agar dashboard Listrik (/api/sensor-data?domain=listrik)
 // langsung membacanya. Body: 6 field listrik, boleh dibungkus { object: {...} }.
@@ -681,4 +786,7 @@ app.post('/api/listrik/ingest', deviceAuth, async (req, res) => {
 app.listen(port, '0.0.0.0', () => {
     console.log(`Backend API berjalan di http://0.0.0.0:${port}`);
     console.log(DEVICE_TOKEN ? '✅ DEVICE_TOKEN terkonfigurasi.' : '⚠️  DEVICE_TOKEN kosong — endpoint perangkat mengembalikan 503.');
+    if (!IOT_INTERNAL_KEY) {
+        console.log('⚠️  IOT_INTERNAL_KEY kosong — konfigurasi WiFi dari web dinonaktifkan.');
+    }
 });

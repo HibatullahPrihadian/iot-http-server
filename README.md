@@ -102,6 +102,9 @@ yang sama; `scripts/check-version.mjs` menegakkan sinkronisasi.
 | `FRONTEND_PORT` | `5005` | Port host untuk frontend. |
 | `DEVICE_TOKEN` | — (wajib) | Token statis `X-Device-Token` untuk endpoint perangkat. Harus sama dengan firmware ESP32. Buat: `openssl rand -hex 32`. |
 | `TUNNEL_TOKEN` | kosong | Token named Cloudflare Tunnel (`iot.phd.my.id` -> `web:80`). Kosong = fallback quick tunnel (hostname acak). |
+| `SETTINGS_SECRET` | kosong | Kunci enkripsi password WiFi di menu Settings. Buat: `openssl rand -hex 32`. **Kosong = ubah WiFi dari web dinonaktifkan.** Mengganti nilai ini membuat password tersimpan tidak bisa didekripsi (isi ulang lewat UI). |
+| `IOT_INTERNAL_KEY` | kosong | Kunci internal `X-Internal-Key` agar hanya hidro-backend yang bisa mengirim config ke perangkat. Buat: `openssl rand -hex 32`. Kosong = config WiFi dari web nonaktif. |
+| `IOT_BASE` | `http://iot-api:3000` | Base URL internal iot-api untuk endpoint admin perangkat. Berbeda dari `IOT_API_URL` yang berisi URL lengkap endpoint sensor. |
 
 ## Routing nginx (satu origin)
 
@@ -129,6 +132,10 @@ yang sama; `scripts/check-version.mjs` menegakkan sinkronisasi.
 | POST | `/api/listrik/ingest` | `{ tegangan, arus, daya, energi, frekuensi, power_factor }` → tulis langsung ke InfluxDB (butuh `X-Device-Token`) |
 | GET | `/api/device/commands` | Perangkat: perintah pending (butuh `X-Device-Token`) |
 | POST | `/api/device/commands/:id/ack` | Perangkat: hapus perintah (butuh `X-Device-Token`) |
+| POST | `/api/device/status` | Perangkat: lapor status WiFi/config (butuh `X-Device-Token`) |
+| GET | `/api/device/status` | Status perangkat untuk menu Settings (tanpa rahasia) |
+| POST | `/api/device/config` | Admin: enqueue config WiFi (butuh `X-Internal-Key`) |
+| POST | `/api/device/config/scan` | Admin: enqueue permintaan scan SSID (butuh `X-Internal-Key`) |
 | GET | `/api/version` | Versi aplikasi -> `{ version, service }` |
 
 ### Ingest (Node-RED)
@@ -164,6 +171,10 @@ Detail kontrak HTTP + token ada di [`dokumentasi.md`](dokumentasi.md).
 | GET | `/api/settings` | Semua setting menu Settings + `pinIsDefault` |
 | PUT | `/api/settings` | Simpan seksi setting (butuh header `X-Settings-Pin`) |
 | PUT | `/api/settings/pin` | Ganti PIN: `{ newPin }` (butuh header `X-Settings-Pin`) |
+| GET | `/api/settings/wifi` | Config WiFi publik (SSID + `hasPassword`) + status perangkat |
+| PUT | `/api/settings/wifi` | Simpan & kirim WiFi: `{ ssid, password?, force? }` (PIN) |
+| POST | `/api/settings/wifi/resend` | Kirim ulang config tersimpan tanpa menaikkan revisi (PIN) |
+| POST | `/api/settings/wifi/scan` | Minta perangkat memindai SSID sekitar (PIN) |
 
 #### RCP (resep nutrisi)
 
@@ -197,15 +208,16 @@ gram = (targetPpm - ppmAirAwal) * volumeAir / 1000 * konstanta
   - Batch arsip membekukan umur saat panen (HSS/HST dihitung sampai tanggal panen).
 - **Status**: tersimpan hanya `Semai` / `Pembesaran`; `Siap Panen` dihitung runtime bila `daysRemaining <= 3` (Meja 3 tidak pernah `Siap Panen`).
 - **Panen = arsip** (`archivedAt`), bukan hapus; pipa jadi kosong dan bisa ditanam ulang (partial unique index `WHERE archivedAt IS NULL`).
-- **Gambar**: JPG/PNG/WEBP, maks 5MB (`client_max_body_size 6m` + multer 5MB), maks 5/batch; disajikan via `/uploads/<file>`.
+- **Gambar**: JPG/PNG/WEBP, batas ukuran & jumlah dari Settings (default 5MB / 5 per batch); disajikan via `/uploads/<file>`.
 - Migrasi DB bersifat **aditif**; data lama tetap utuh.
 - **Pengukuran ppm/pH bersifat per tangki** (`TankReading`), bukan per pipa: satu tangki dipakai 3 meja, jadi input cukup sekali di panel Resep Tangki. Pengukuran lama per batch disalin sekali ke `TankReading` (hanya batch aktif) lalu baris berurutan dengan ppm & pH sama dalam ≤10 menit digabung; `BatchReading` tetap disimpan sebagai arsip.
 - **Target alert** pengukuran tangki mengikuti resep tangki aktif (`activeTankRecipeId`); bila belum diset, pengukuran tetap bisa dicatat tanpa peringatan.
 - **Dua chart library**: recharts (halaman Plan), chart.js (halaman IoT) — tidak dicampur satu halaman.
-- **Listrik (PZEM-004T)**: field `tegangan, arus, daya, energi, frekuensi, power_factor` ditulis ke `_measurement` sama (`hidroponik_sensor`) lewat `POST /api/listrik/ingest` di `iot-api` (langsung ke InfluxDB, **tidak** lewat Node-RED). Firmware NodeMCU mengirim data listrik terpisah dari payload sensor hidroponik. `energi` bersifat kumulatif — pemakaian periode dihitung dari selisihnya. Tarif biaya (Rp/kWh) diatur di UI dan disimpan di `localStorage`.
+- **Listrik (PZEM-004T)**: field `tegangan, arus, daya, energi, frekuensi, power_factor` ditulis ke `_measurement` sama (`hidroponik_sensor`) lewat `POST /api/listrik/ingest` di `iot-api` (langsung ke InfluxDB, **tidak** lewat Node-RED). Firmware NodeMCU mengirim data listrik terpisah dari payload sensor hidroponik. `energi` bersifat kumulatif — pemakaian periode dihitung dari selisihnya. Tarif biaya (Rp/kWh) diatur di Settings > Listrik dan disimpan di server.
 - **Kredensial hardcode** di `iot-api/server.js` (token InfluxDB) dan `note.txt` (dapat dioverride lewat env `INFLUXDB_TOKEN`/`INFLUXDB_URL`). Sebaiknya dipindah penuh ke `.env` di task terpisah.
 - **Antrean perintah in-memory**: perintah yang belum di-ACK hilang saat `iot-api` restart. Pindah ke SQLite bila perlu durabilitas.
 - **HTTPS ESP32**: firmware memakai `setInsecure()` — tidak memvalidasi sertifikat. Cukup untuk sekarang; sebaiknya pin sertifikat/root CA.
+- **WiFi dari web (Settings > WiFi)**: ESP32 & NodeMCU menyimpan kredensial di NVS/EEPROM dengan rollback otomatis (30 detik) dan captive portal `Hidro-Setup-XXXX` bila gagal tersambung. Perlu `SETTINGS_SECRET` + `IOT_INTERNAL_KEY` di `.env`. **Firmware versi 1.1.0 wajib di-flash sekali**; setelah itu perubahan WiFi bisa dari dashboard.
 - **Keamanan**: rute dashboard (`POST /api/*/kontrol`) juga lewat tunnel; token hanya melindungi endpoint perangkat. Rekomendasi: Cloudflare Access untuk dashboard.
 
 ## Data & Backup

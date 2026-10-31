@@ -4,14 +4,19 @@
 #include <espnow.h>
 #include <SoftwareSerial.h>
 #include <PZEM004Tv30.h>
+#include <EEPROM.h>
 
 // ================= KONFIGURASI WIFI =================
 // WAJIB sama dengan WIFI_SSID/WIFI_PASS di ESP32.
 // swNodeMCU ikut connect ke AP yang sama agar channel radionya sama dengan ESP32
 // (ESP-NOW hanya bisa antar-device di channel yang sama).
-// GANTI dengan kredensial WiFi Anda. Jangan commit kredensial asli.
+// Nilai di bawah hanya dipakai saat EEPROM kosong (flash pertama). Setelah itu,
+// WiFi diatur dari menu Settings di web dan dikirim lewat ESP-NOW.
 const char* WIFI_SSID = "GANTI_SSID";
 const char* WIFI_PASS = "GANTI_PASS";
+
+#define FIRMWARE_VERSION "1.1.0"
+#define DEVICE_ID "utama"
 
 // Definisi Pin NodeMCU ke Pin PWM Modul MOSFET (Pompa AB Mix)
 const int pinMOSFET_B = 14; // Pin D5 NodeMCU -> Hubungkan ke PWM MOSFET Pompa AB Mix
@@ -46,7 +51,43 @@ typedef struct struct_message {
     int durasi;
 } struct_message;
 
+// Frame config WiFi. WAJIB identik & packed di kedua sisi (target 108 byte).
+typedef struct __attribute__((packed)) {
+    char type[8];      // "CFG" | "ACK" | "GO"
+    char ssid[33];
+    char pass[64];
+    uint16_t revision;
+    uint8_t force;
+} struct_config;
+
 struct_message dataTerima;
+
+// ================= CONFIG WIFI DI EEPROM =================
+struct NodeCfg {
+    uint32_t magic;
+    char ssid[33];
+    char pass[64];
+    uint16_t revApplied;
+    uint16_t revPend;
+    char ssidPend[33];
+    char passPend[64];
+    char lastErr[32];
+};
+
+const uint32_t CFG_MAGIC = 0x48445231; // "HDR1"
+NodeCfg cfg;
+
+// Konfigurasi pending yang dikirim ESP32 lewat ESP-NOW (belum di-commit).
+bool cfgPendingValid = false;
+String cfgPendSsid;
+String cfgPendPass;
+uint16_t cfgPendRev = 0;
+unsigned long cfgPendingExpire = 0;
+
+// Jadwal restart setelah frame GO.
+unsigned long restartAt = 0;
+bool restartScheduled = false;
+bool goPending = false;   // commit EEPROM dilakukan di loop(), bukan di callback
 
 // Variabel Kontrol Pompa AB Mix (State Machine)
 bool pompaB_Aktif = false;
@@ -279,8 +320,173 @@ void jalankanPerintah(const String& cmd, int durasi, const char* sumber) {
   }
 }
 
+// ================= CONFIG WIFI: EEPROM, ROLLBACK, STATUS =================
+void loadCfg() {
+  EEPROM.begin(512);
+  EEPROM.get(0, cfg);
+  if (cfg.magic != CFG_MAGIC) {
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.magic = CFG_MAGIC;
+    strncpy(cfg.ssid, WIFI_SSID, sizeof(cfg.ssid) - 1);
+    strncpy(cfg.pass, WIFI_PASS, sizeof(cfg.pass) - 1);
+    EEPROM.put(0, cfg);
+    EEPROM.commit();
+  }
+}
+
+void saveCfg() {
+  EEPROM.put(0, cfg);
+  EEPROM.commit();
+}
+
+bool connectWifi(const char* ssid, const char* pass, unsigned long timeoutMs) {
+  if (!ssid || !ssid[0]) return false;
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, pass);
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
+    delay(200);
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFi.setSleepMode(WIFI_NONE_SLEEP);
+    return true;
+  }
+  return false;
+}
+
+// Cek server terjangkau (dipakai untuk memastikan kredensial baru benar-benar
+// membawa perangkat kembali online sebelum config pending dipromosikan).
+bool serverReachable() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  WiFiClient client;
+  HTTPClient http;
+  String url = String(SERVER_HTTPS ? F("https://") : F("http://")) + SERVER_HOST + ":" + SERVER_PORT + "/api/version";
+  http.setTimeout(5000);
+  if (!http.begin(client, url)) return false;
+  http.addHeader(F("X-Device-Token"), DEVICE_TOKEN);
+  int code = http.GET();
+  http.end();
+  return code >= 200 && code < 300;
+}
+
+void bootWifi() {
+  loadCfg();
+
+  if (cfg.revPend > cfg.revApplied && cfg.ssidPend[0]) {
+    logLine(String(F("[WiFi] Mencoba config baru: ")) + cfg.ssidPend);
+    if (connectWifi(cfg.ssidPend, cfg.passPend, 20000) && serverReachable()) {
+      strncpy(cfg.ssid, cfg.ssidPend, sizeof(cfg.ssid) - 1);
+      strncpy(cfg.pass, cfg.passPend, sizeof(cfg.pass) - 1);
+      cfg.revApplied = cfg.revPend;
+      cfg.ssidPend[0] = '\0';
+      cfg.passPend[0] = '\0';
+      cfg.revPend = 0;
+      cfg.lastErr[0] = '\0';
+      saveCfg();
+      logLine(F("[WiFi] Config baru diterapkan."));
+      return;
+    }
+    strncpy(cfg.lastErr, "wifi-apply-failed", sizeof(cfg.lastErr) - 1);
+    cfg.ssidPend[0] = '\0';
+    cfg.passPend[0] = '\0';
+    cfg.revPend = 0;
+    saveCfg();
+    logLine(F("[WiFi] Config baru gagal, rollback ke kredensial lama."));
+  }
+
+  if (!connectWifi(cfg.ssid, cfg.pass, 30000)) {
+    logLine(F("[WiFi] Gagal menyambung. Menunggu config dari ESP32/portal."));
+  } else {
+    logLine(String(F("[WiFi] Terhubung. IP: ")) + WiFi.localIP().toString());
+  }
+}
+
+// Kirim frame balasan (ACK) ke ESP32 pengirim.
+void sendFrame(uint8_t* mac, const char* type, uint16_t rev) {
+  struct_config frame;
+  memset(&frame, 0, sizeof(frame));
+  strncpy(frame.type, type, sizeof(frame.type) - 1);
+  frame.revision = rev;
+
+  esp_now_add_peer(mac, ESP_NOW_ROLE_CONTROLLER, WiFi.channel(), NULL, 0);
+  esp_now_send(mac, (uint8_t*)&frame, sizeof(frame));
+}
+
+// Lapor status perangkat ke server (WiFi + revisi config).
+void reportStatus() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  String body;
+  body.reserve(260);
+  body  = F("{\"deviceId\":\"");
+  body += DEVICE_ID;
+  body += F("\",\"role\":\"node\",\"firmware\":\"");
+  body += FIRMWARE_VERSION;
+  body += F("\",\"ssid\":\"");
+  body += WiFi.SSID();
+  body += F("\",\"appliedRevision\":");
+  body += cfg.revApplied;
+  body += F(",\"pendingRevision\":");
+  body += cfg.revPend;
+  body += F(",\"ip\":\"");
+  body += WiFi.localIP().toString();
+  body += F("\",\"rssi\":");
+  body += WiFi.RSSI();
+  body += F(",\"linkOk\":true,\"lastError\":\"");
+  body += cfg.lastErr;
+  body += F("\"}");
+
+  WiFiClient client;
+  HTTPClient http;
+  String url = String(SERVER_HTTPS ? F("https://") : F("http://")) + SERVER_HOST + ":" + SERVER_PORT + "/api/device/status";
+  http.setTimeout(3000);
+  if (http.begin(client, url)) {
+    http.addHeader(F("Content-Type"), F("application/json"));
+    http.addHeader(F("X-Device-Token"), DEVICE_TOKEN);
+    int code = http.POST(body);
+    http.end();
+    if (code >= 200 && code < 300) {
+      logLine(F("[HTTP] Status perangkat dilaporkan."));
+    }
+  }
+}
+
 // Fungsi Callback saat data diterima via ESP-NOW dari ESP32
 void OnDataRecv(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
+  // Frame config WiFi (ukurannya beda dari struct_message lama).
+  if (len == sizeof(struct_config)) {
+    struct_config frame;
+    memcpy(&frame, incomingData, sizeof(frame));
+    frame.type[sizeof(frame.type) - 1] = '\0';
+
+    if (strcmp(frame.type, "CFG") == 0) {
+      if (goPending) return; // sudah dijadwalkan pindah, abaikan CFG baru
+      cfgPendSsid = String(frame.ssid);
+      cfgPendPass = String(frame.pass);
+      cfgPendRev = frame.revision;
+      cfgPendingValid = true;
+      cfgPendingExpire = millis() + 30000;
+      logLine(String(F("[WiFi] CFG diterima rev ")) + cfgPendRev);
+      sendFrame(mac, "ACK", frame.revision);
+      return;
+    }
+
+    if (strcmp(frame.type, "GO") == 0) {
+      if (cfgPendingValid && frame.revision == cfgPendRev) {
+        // Commit EEPROM & restart ditangani loop() agar tidak menulis flash
+        // di dalam callback WiFi.
+        goPending = true;
+        restartAt = millis() + 12000;
+        cfgPendingValid = false;
+        logLine(F("[WiFi] GO diterima, restart dalam 12 detik."));
+        sendFrame(mac, "ACK", frame.revision);
+      }
+      return;
+    }
+    return;
+  }
+
+  // Perintah aktuator lama.
   memcpy(&dataTerima, incomingData, sizeof(dataTerima));
   dataTerima.perintah[sizeof(dataTerima.perintah) - 1] = '\0';
 
@@ -362,6 +568,16 @@ const char HALAMAN_INDEX[] PROGMEM = R"=====(
 </div>
 
 <div class="card">
+  <div class="name" style="margin-bottom:8px;">WiFi (read-only)</div>
+  <div class="row"><span>SSID</span><span class="state" id="wfSsid">--</span></div>
+  <div class="row"><span>IP</span><span class="state" id="wfIp">--</span></div>
+  <div class="row"><span>Sinyal</span><span class="state" id="wfRssi">--</span></div>
+  <div class="row"><span>Revisi config</span><span class="state" id="wfRev">--</span></div>
+  <div class="row"><span>Error terakhir</span><span class="state" id="wfErr">-</span></div>
+  <div class="sub" style="margin:8px 0 0;">Ubah WiFi dari dashboard web (menu Settings &gt; WiFi).</div>
+</div>
+
+<div class="card">
   <div class="name" style="margin-bottom:8px;">Log Riwayat Perintah</div>
   <div id="log"></div>
 </div>
@@ -378,6 +594,11 @@ function update(){fetch('/status').then(function(r){return r.json();}).then(func
   pb.textContent='Pompa: '+(j.pompa?'ON':'OFF');
   pb.className='badge'+(j.pompa?' on':'');
   document.getElementById('ip').textContent='IP: '+j.ip;
+  document.getElementById('wfSsid').textContent=j.ssid||'--';
+  document.getElementById('wfIp').textContent=j.ip||'--';
+  document.getElementById('wfRssi').textContent=(j.rssi||j.rssi===0)?(j.rssi+' dBm'):'--';
+  document.getElementById('wfRev').textContent=(j.rev||0);
+  document.getElementById('wfErr').textContent=j.err||'-';
 });fetch('/log').then(function(r){return r.text();}).then(function(t){document.getElementById('log').textContent=t;});}
 function f(v,d,s){return (v===null||v===undefined)?'--':v.toFixed(d)+' '+s;}
 function updatePZEM(){fetch('/pzem').then(function(r){return r.json();}).then(function(j){
@@ -431,7 +652,7 @@ void handleStatus() {
     sisa = (elapsed >= durasiB) ? 0 : (durasiB - elapsed);
   }
   String j;
-  j.reserve(160);
+  j.reserve(280);
   j += F("{\"relay\":[");
   for (int i = 0; i < 4; i++) {
     if (i) j += ',';
@@ -443,6 +664,14 @@ void handleStatus() {
   j += sisa;
   j += F(",\"ip\":\"");
   j += WiFi.localIP().toString();
+  j += F("\",\"ssid\":\"");
+  j += WiFi.SSID();
+  j += F("\",\"rssi\":");
+  j += WiFi.RSSI();
+  j += F(",\"rev\":");
+  j += cfg.revApplied;
+  j += F(",\"err\":\"");
+  j += cfg.lastErr;
   j += F("\"}");
   server.send(200, F("application/json"), j);
 }
@@ -524,22 +753,13 @@ void setup() {
   // Aktifkan WiFi Mode Station (Syarat ESP-NOW)
   WiFi.mode(WIFI_STA);
 
-  // Connect ke AP yang sama dengan ESP32 supaya channel radio sinkron.
+  // Connect ke AP dari EEPROM (fallback ke kredensial firmware saat kosong).
   // Koneksi ini menyamakan channel ESP-NOW, sekaligus dipakai untuk mengirim
   // data PZEM ke server (POST /api/listrik/ingest).
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  logPrefix(); Serial.print(F("Menyambung ke WiFi"));
-  unsigned long mulaiWifi = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - mulaiWifi < 15000) {
-    delay(500);
-    Serial.print(".");
-  }
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print(F("\n"));
-    logLine(String(F("WiFi tersambung. IP: ")) + WiFi.localIP().toString());
-  } else {
-    logLine(F("Gagal menyambung WiFi — ESP-NOW mungkin tidak sinkron channel!"));
-  }
+  bootWifi();
+  Serial.print(F("\n"));
+  Serial.print(F("sizeof(struct_config) = "));
+  Serial.println((int)sizeof(struct_config));
 
   // Sinkronkan waktu untuk timestamp log (NTP butuh internet). Bila gagal,
   // akan dicoba lagi dari loop() setelah WiFi tersambung.
@@ -557,13 +777,15 @@ void setup() {
     return;
   }
   
-  // Atur Peran sebagai Slave (Penerima)
-  esp_now_set_self_role(ESP_NOW_ROLE_SLAVE);
+  // Peran COMBO: menerima perintah DAN membalas ACK config ke ESP32.
+  esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
   esp_now_register_recv_cb(OnDataRecv);
   
   // Aktifkan web server untuk kontrol relay & pompa
   setupWebServer();
   logLine(String(F("Web server aktif di http://")) + WiFi.localIP().toString() + F("/"));
+
+  if (WiFi.status() == WL_CONNECTED) reportStatus();
 
   logLine(F("NodeMCU Siap Mengontrol MOSFET LR7843 via ESP-NOW!"));
 }
@@ -572,16 +794,50 @@ void loop() {
   // Layani request HTTP dari browser (non-blocking)
   server.handleClient();
 
+  // Commit config pending setelah GO (di luar callback ESP-NOW).
+  if (goPending && !restartScheduled) {
+    memset(cfg.ssidPend, 0, sizeof(cfg.ssidPend));
+    memset(cfg.passPend, 0, sizeof(cfg.passPend));
+    strncpy(cfg.ssidPend, cfgPendSsid.c_str(), sizeof(cfg.ssidPend) - 1);
+    strncpy(cfg.passPend, cfgPendPass.c_str(), sizeof(cfg.passPend) - 1);
+    cfg.revPend = cfgPendRev;
+    saveCfg();
+    restartScheduled = true;
+    logLine(F("[WiFi] Config pending disimpan ke EEPROM."));
+  }
+
+  // Jadwal restart setelah frame GO (diberi jeda agar ESP32 selesai ACK).
+  if (restartScheduled && millis() >= restartAt) {
+    logLine(F("[WiFi] Restart untuk menerapkan config baru."));
+    delay(100);
+    ESP.restart();
+  }
+
+  // Buang config pending yang tidak pernah menerima GO.
+  if (cfgPendingValid && millis() > cfgPendingExpire) {
+    cfgPendingValid = false;
+    cfgPendSsid = "";
+    cfgPendPass = "";
+    logLine(F("[WiFi] Config pending kedaluwarsa (tanpa GO)."));
+  }
+
   // Jaga koneksi WiFi (channel harus tetap sama dengan ESP32).
   if (WiFi.status() != WL_CONNECTED) {
     static unsigned long terakhirCoba = 0;
     if (millis() - terakhirCoba >= 5000) {
       terakhirCoba = millis();
       logLine(F("WiFi terputus, menyambung ulang..."));
-      WiFi.reconnect();
+      WiFi.begin(cfg.ssid, cfg.pass);
     }
   } else {
     sinkronWaktuNTP(); // coba lagi sampai NTP berhasil
+
+    // Status perangkat tiap 60 detik.
+    static unsigned long terakhirStatus = 0;
+    if (millis() - terakhirStatus >= 60000UL) {
+      terakhirStatus = millis();
+      reportStatus();
+    }
   }
 
   // Pengecekan Waktu Otomatis untuk Pompa AB Mix (Non-blocking)

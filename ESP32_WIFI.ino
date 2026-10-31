@@ -3,6 +3,9 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <esp_now.h>
+#include <Preferences.h>
+#include <WebServer.h>
+#include <DNSServer.h>
 #include "DHT.h"
 #include <OneWire.h>
 #include <DallasTemperature.h>
@@ -12,12 +15,17 @@
 // ================= KONFIGURASI WIFI & SERVER =================
 // Kredensial WiFi + token perangkat ada di secrets.h (gitignored).
 // Salin secrets.h.example -> secrets.h lalu isi nilai sebenarnya.
+// WIFI_SSID/WIFI_PASS hanya dipakai sebagai kredensial AWAL saat NVS kosong;
+// setelah itu WiFi diatur dari menu Settings (disimpan di NVS).
 #include "secrets.h"
 
 // Basis URL server.
 // LAN (lebih cepat, tanpa TLS): http://192.168.2.10:5005
 // Produksi (via Cloudflare Tunnel): https://hidroponik.phd.my.id
 const char* SERVER_BASE = "https://hidroponik.phd.my.id";
+
+#define FIRMWARE_VERSION "1.1.0"
+#define DEVICE_ID "utama"
 
 const unsigned long POLL_INTERVAL = 5000;   // polling perintah (ms)
 // Latency lewat Cloudflare + TLS handshake terukur ~1.2-3.0s, jadi timeout
@@ -35,8 +43,45 @@ typedef struct struct_message {
     int durasi;
 } struct_message;
 
+// Frame config WiFi. WAJIB identik & packed di kedua sisi (target 108 byte).
+typedef struct __attribute__((packed)) {
+    char type[8];      // "CFG" | "ACK" | "GO"
+    char ssid[33];
+    char pass[64];
+    uint16_t revision;
+    uint8_t force;
+} struct_config;
+
 struct_message dataKirim;
 esp_now_peer_info_t peerInfo;
+
+// ================= CONFIG WIFI DI NVS =================
+// Namespace hydro-cfg. Kredensial aktif dipakai saat boot; kredensial pending
+// (dari Settings) dicoba lebih dulu, dan otomatis di-rollback bila gagal.
+Preferences prefs;
+String cfgSsid, cfgPass;
+String pendSsid, pendPass;
+uint16_t revApplied = 0;
+uint16_t revPend = 0;
+String lastErr;
+
+volatile bool cfgAckOk = false;
+volatile uint16_t cfgAckRev = 0;
+bool lastLinkOk = true;
+
+// Hasil scan WiFi terakhir (dikirim ke server lewat status).
+struct ScanEntry {
+    char ssid[33];
+    int8_t rssi;
+    bool secure;
+};
+const int SCAN_MAX = 20;
+ScanEntry scanList[SCAN_MAX];
+int scanCount = 0;
+bool scanPendingReport = false;
+
+// Forward declaration (dipakai helper WiFi sebelum definisinya).
+int httpRequest(const char* method, const String& path, const String& body, String& response);
 
 // ================= CONFIG SENSOR SUHU UDARA (DHT11) =================
 #define DHTPIN 4        
@@ -81,7 +126,7 @@ const unsigned long INTERVAL_CEK = 60000;
 // ================= TIMER NON-BLOCKING =================
 unsigned long waktuUplinkTerakhir = 0;
 unsigned long waktuPollTerakhir = 0;
-unsigned long waktuWifiTerakhir = 0;
+unsigned long waktuStatusTerakhir = 0;
 // Uplink sensor "segera" HANYA dipakai saat WiFi baru tersambung (agar data
 // pertama tidak menunggu TX_INTERVAL). Perubahan relay TIDAK memicunya lagi:
 // status relay dikirim lewat endpoint terpisah tanpa data sensor.
@@ -127,31 +172,273 @@ void kirimPerintahKeNodeMCU(const char* targetAktuator, int durasiMs) {
     }
 }
 
-// ================= KONEKSI WIFI (AUTO-RECONNECT) =================
-void pastikanWiFi() {
-    if (WiFi.status() == WL_CONNECTED) return;
-    // Debounce hanya berlaku untuk percobaan ULANG. Percobaan pertama
-    // (waktuWifiTerakhir masih 0) harus selalu jalan, jika tidak maka
-    // koneksi awal di setup() akan terlewat karena millis() < 5000.
-    if (waktuWifiTerakhir != 0 && millis() - waktuWifiTerakhir < 5000) return;
-    waktuWifiTerakhir = millis();
+// ================= KONFIGURASI WIFI (NVS + ROLLBACK + PORTAL) =================
+void loadWifiConfig() {
+    prefs.begin("hydro-cfg", false);
+    cfgSsid = prefs.getString("ssid", "");
+    cfgPass = prefs.getString("pass", "");
+    revApplied = prefs.getUShort("revApplied", 0);
+    pendSsid = prefs.getString("ssidPend", "");
+    pendPass = prefs.getString("passPend", "");
+    revPend = prefs.getUShort("revPend", 0);
+    lastErr = prefs.getString("lastErr", "");
 
-    logPrefix(); Serial.print(F("[WiFi] Menyambung ke ")); Serial.println(WIFI_SSID);
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
-    unsigned long mulai = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - mulai < 10000) {
-        delay(250);
-    }
-    if (WiFi.status() == WL_CONNECTED) {
-        logPrefix(); Serial.print(F("[WiFi] Terhubung. IP: ")); Serial.println(WiFi.localIP());
-        logPrefix(); Serial.print(F("[WiFi] Channel AP: ")); Serial.println(WiFi.channel());
-        // Matikan modem sleep: radio harus tetap aktif untuk ESP-NOW,
-        // dan channel harus tetap sama dengan NodeMCU slave.
-        WiFi.setSleep(false);
-    } else {
-        logLine(F("[WiFi] Gagal terhubung, coba lagi nanti."));
+    // NVS kosong -> pakai kredensial firmware sebagai titik awal.
+    if (cfgSsid.isEmpty()) {
+        cfgSsid = WIFI_SSID;
+        cfgPass = WIFI_PASS;
+        prefs.putString("ssid", cfgSsid);
+        prefs.putString("pass", cfgPass);
     }
 }
+
+void saveLastError(const String& err) {
+    lastErr = err;
+    prefs.putString("lastErr", lastErr);
+}
+
+bool connectWifi(const String& ssid, const String& pass, unsigned long timeoutMs) {
+    if (ssid.isEmpty()) return false;
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid.c_str(), pass.c_str());
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
+        delay(200);
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+        WiFi.setSleep(false);
+        return true;
+    }
+    return false;
+}
+
+bool serverReachable() {
+    if (WiFi.status() != WL_CONNECTED) return false;
+    String resp;
+    int status = httpRequest("GET", "/api/version", "", resp);
+    return status >= 200 && status < 300;
+}
+
+// Captive portal darurat: hanya aktif bila perangkat tidak bisa masuk AP mana
+// pun. Menyimpan config baru lalu restart.
+WebServer portalServer(80);
+DNSServer portalDns;
+bool portalActive = false;
+
+const char PORTAL_PAGE[] PROGMEM = R"HTML(
+<!DOCTYPE html><html lang="id"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Config WiFi Hidroponik</title>
+<style>body{font-family:Arial,sans-serif;margin:0;padding:20px;background:#eef2f5;color:#22303c}
+.wrap{max-width:420px;margin:0 auto}h1{font-size:18px}
+.card{background:#fff;border-radius:10px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.12)}
+label{display:block;font-size:12px;font-weight:bold;margin:12px 0 4px}
+input{width:100%;box-sizing:border-box;height:38px;padding:0 10px;border:1px solid #cbd5e0;border-radius:6px}
+button{margin-top:16px;width:100%;height:40px;border:none;border-radius:6px;background:#2b6cb0;color:#fff;font-size:14px}
+p{font-size:12px;color:#6b7c8c}</style></head><body><div class="wrap">
+<h1>Config WiFi Hidroponik</h1><div class="card">
+<form method="POST" action="/save">
+<label>SSID</label><input name="ssid" maxlength="32" required>
+<label>Password</label><input name="pass" type="password" maxlength="63">
+<button type="submit">Simpan &amp; Restart</button>
+</form><p>Perangkat akan restart dan mencoba tersambung. Bila gagal, portal ini muncul lagi.</p>
+</div></div></body></html>
+)HTML";
+
+void startCaptivePortal() {
+    if (portalActive) return;
+    portalActive = true;
+    logLine(F("[WiFi] Gagal tersambung - membuka captive portal"));
+
+    // Nama AP memakai 4 digit terakhir chip id agar mudah dikenali.
+    char apName[24];
+    snprintf(apName, sizeof(apName), "Hidro-Setup-%04X", (unsigned)((uint32_t)ESP.getEfuseMac() & 0xFFFF));
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP(apName);
+
+    portalDns.start(53, "*", WiFi.softAPIP());
+    portalServer.on("/", []() { portalServer.send(200, "text/html", FPSTR(PORTAL_PAGE)); });
+    portalServer.on("/save", []() {
+        String ssid = portalServer.arg("ssid");
+        String pass = portalServer.arg("pass");
+        if (ssid.isEmpty()) {
+            portalServer.send(400, "text/plain", "SSID wajib diisi");
+            return;
+        }
+        prefs.putString("ssidPend", ssid);
+        prefs.putString("passPend", pass);
+        prefs.putUShort("revPend", revApplied + 1);
+        portalServer.send(200, "text/html",
+                          "<h3>Tersimpan. Perangkat restart...</h3>");
+        delay(800);
+        ESP.restart();
+    });
+    portalServer.onNotFound([]() {
+        portalServer.sendHeader("Location", "http://192.168.4.1/", true);
+        portalServer.send(302, "text/plain", "");
+    });
+    portalServer.begin();
+
+    // Layani portal maksimal 5 menit; setelah itu restart agar perangkat
+    // mencoba lagi koneksi normal (mis. AP sempat mati sesaat).
+    unsigned long mulaiPortal = millis();
+    while (millis() - mulaiPortal < 5UL * 60UL * 1000UL) {
+        portalDns.processNextRequest();
+        portalServer.handleClient();
+        delay(2);
+    }
+    logLine(F("[WiFi] Portal timeout, restart untuk mencoba ulang."));
+    ESP.restart();
+}
+
+// Cek kredensial pending saat boot: 30 detik + verifikasi server.
+void bootWifi() {
+    loadWifiConfig();
+
+    if (revPend > revApplied && !pendSsid.isEmpty()) {
+        logLine(String(F("[WiFi] Mencoba config baru: ")) + pendSsid);
+        if (connectWifi(pendSsid, pendPass, 30000) && serverReachable()) {
+            prefs.putString("ssid", pendSsid);
+            prefs.putString("pass", pendPass);
+            prefs.putUShort("revApplied", revPend);
+            prefs.remove("ssidPend");
+            prefs.remove("passPend");
+            prefs.putUShort("revPend", 0);
+            cfgSsid = pendSsid;
+            cfgPass = pendPass;
+            revApplied = revPend;
+            revPend = 0;
+            saveLastError("");
+            logLine(F("[WiFi] Config baru diterapkan."));
+            return;
+        }
+        // Rollback: buang pending, kembali ke kredensial lama.
+        saveLastError("wifi-apply-failed");
+        prefs.remove("ssidPend");
+        prefs.remove("passPend");
+        prefs.putUShort("revPend", 0);
+        revPend = 0;
+        logLine(F("[WiFi] Config baru gagal, rollback ke kredensial lama."));
+    }
+
+    if (!connectWifi(cfgSsid, cfgPass, 60000)) {
+        startCaptivePortal();
+    } else {
+        logLine(String(F("[WiFi] Terhubung. IP: ")) + WiFi.localIP().toString());
+    }
+}
+
+// Kirim CFG ke NodeMCU, tunggu ACK (maks 3 detik). true = ACK diterima.
+bool sendCfgToNode(const String& ssid, const String& pass, uint16_t rev) {
+    struct_config frame;
+    memset(&frame, 0, sizeof(frame));
+    strncpy(frame.type, "CFG", sizeof(frame.type) - 1);
+    strncpy(frame.ssid, ssid.c_str(), sizeof(frame.ssid) - 1);
+    strncpy(frame.pass, pass.c_str(), sizeof(frame.pass) - 1);
+    frame.revision = rev;
+    frame.force = 0;
+
+    cfgAckOk = false;
+    cfgAckRev = 0;
+
+    unsigned long start = millis();
+    while (millis() - start < 3000) {
+        esp_err_t r = esp_now_send(macNodeMCU, (uint8_t*)&frame, sizeof(frame));
+        lastLinkOk = (r == ESP_OK);
+        delay(400);
+        if (cfgAckOk && cfgAckRev == rev) return true;
+    }
+    return false;
+}
+
+void sendGoToNode(uint16_t rev) {
+    struct_config frame;
+    memset(&frame, 0, sizeof(frame));
+    strncpy(frame.type, "GO", sizeof(frame.type) - 1);
+    frame.revision = rev;
+    esp_now_send(macNodeMCU, (uint8_t*)&frame, sizeof(frame));
+}
+
+// Terapkan perintah WiFi dari server.
+void applyWifiCommand(const String& ssid, const String& pass, uint16_t rev, bool force) {
+    logLine(String(F("[WiFi] Perintah config: ")) + ssid + F(" rev ") + rev);
+
+    bool ack = sendCfgToNode(ssid, pass, rev);
+    if (!ack && !force) {
+        saveLastError("node-no-ack");
+        logLine(F("[WiFi] NodeMCU tidak membalas ACK, config dibatalkan."));
+        return;
+    }
+
+    prefs.putString("ssidPend", ssid);
+    prefs.putString("passPend", pass);
+    prefs.putUShort("revPend", rev);
+    if (ack) sendGoToNode(rev);
+
+    logLine(F("[WiFi] Config tersimpan, restart untuk menerapkan."));
+    delay(300);
+    ESP.restart();
+}
+
+void requestWifiScan() {
+    logLine(F("[WiFi] Memindai SSID sekitar..."));
+    int n = WiFi.scanNetworks();
+    scanCount = 0;
+    for (int i = 0; i < n && scanCount < SCAN_MAX; i++) {
+        String s = WiFi.SSID(i);
+        if (s.isEmpty()) continue;
+        bool dup = false;
+        for (int j = 0; j < scanCount; j++) {
+            if (s == scanList[j].ssid) { dup = true; break; }
+        }
+        if (dup) continue;
+        strncpy(scanList[scanCount].ssid, s.c_str(), sizeof(scanList[scanCount].ssid) - 1);
+        scanList[scanCount].ssid[sizeof(scanList[scanCount].ssid) - 1] = '\0';
+        scanList[scanCount].rssi = (int8_t)WiFi.RSSI(i);
+        scanList[scanCount].secure = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+        scanCount++;
+    }
+    scanPendingReport = true;
+    logLine(String(F("[WiFi] Scan selesai: ")) + scanCount + F(" SSID"));
+}
+
+// Laporkan status perangkat ke server (WiFi, revisi, hasil scan).
+void reportStatus() {
+    if (WiFi.status() != WL_CONNECTED) return;
+
+    JsonDocument doc;
+    doc["deviceId"] = DEVICE_ID;
+    doc["role"] = "esp32";
+    doc["firmware"] = FIRMWARE_VERSION;
+    doc["ssid"] = WiFi.SSID();
+    doc["appliedRevision"] = revApplied;
+    doc["pendingRevision"] = revPend;
+    doc["ip"] = WiFi.localIP().toString();
+    doc["rssi"] = WiFi.RSSI();
+    doc["linkOk"] = lastLinkOk;
+    doc["lastError"] = lastErr;
+
+    if (scanCount > 0) {
+        JsonObject scan = doc["scan"].to<JsonObject>();
+        scan["at"] = "";
+        JsonArray nets = scan["networks"].to<JsonArray>();
+        for (int i = 0; i < scanCount; i++) {
+            JsonObject n = nets.add<JsonObject>();
+            n["ssid"] = scanList[i].ssid;
+            n["rssi"] = scanList[i].rssi;
+            n["secure"] = scanList[i].secure;
+        }
+    }
+
+    String body;
+    serializeJson(doc, body);
+    String resp;
+    int status = httpRequest("POST", "/api/device/status", body, resp);
+    if (status >= 200 && status < 300) {
+        scanPendingReport = false;
+    }
+}
+
 
 // ================= SINKRONISASI WAKTU (NTP) =================
 // NTP butuh internet, jadi hanya dijalankan setelah WiFi tersambung.
@@ -299,6 +586,14 @@ void laporStatusRelay() {
 }
 
 // ================= EKSEKUSI PERINTAH DARI SERVER =================
+void ackCommand(int id) {
+    if (id <= 0) return;
+    String resp;
+    String path = "/api/device/commands/" + String(id) + "/ack";
+    int status = httpRequest("POST", path, "{}", resp);
+    logLine(String(F("[HTTP] ACK #")) + id + F(" -> ") + status);
+}
+
 void eksekusiPerintah(JsonObject c) {
     const char* type = c["type"] | "";
     int id = c["id"] | -1;
@@ -333,14 +628,22 @@ void eksekusiPerintah(JsonObject c) {
         // supaya tombol UI cepat sinkron tanpa mengirim data sensor.
         laporStatusRelay();
     }
+    else if (strcmp(type, "wifi-scan") == 0) {
+        requestWifiScan();
+    }
+    else if (strcmp(type, "wifi") == 0) {
+        String newSsid = c["ssid"] | "";
+        String newPass = c["password"] | "";
+        uint16_t rev = c["revision"] | 0;
+        bool force = c["force"] | false;
+        // ACK SEBELUM restart, agar perintah tidak dikirim ulang setelah boot.
+        ackCommand(id);
+        applyWifiCommand(newSsid, newPass, rev, force);
+        return;
+    }
 
     // ACK: hapus perintah dari antrean server.
-    if (id > 0) {
-        String resp;
-        String path = "/api/device/commands/" + String(id) + "/ack";
-        int status = httpRequest("POST", path, "{}", resp);
-        logLine(String(F("[HTTP] ACK #")) + id + F(" -> ") + status);
-    }
+    ackCommand(id);
 }
 
 // ================= POLLING PERINTAH (GET /api/device/commands) =================
@@ -362,15 +665,39 @@ void pollPerintah() {
     }
 }
 
+// ================= CALLBACK ESP-NOW (ACK CONFIG DARI NODEMCU) =================
+// Core Arduino-ESP32 3.x memakai esp_now_recv_info_t; 2.x memakai MAC langsung.
+void handleConfigAck(const uint8_t* data, int len) {
+    if (len != (int)sizeof(struct_config)) return;
+    struct_config frame;
+    memcpy(&frame, data, sizeof(frame));
+    if (strncmp(frame.type, "ACK", 3) == 0) {
+        cfgAckRev = frame.revision;
+        cfgAckOk = true;
+        logLine(String(F("[ESP-NOW] ACK config rev ")) + frame.revision);
+    }
+}
+
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+void onEspNowRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
+    handleConfigAck(data, len);
+}
+#else
+void onEspNowRecv(const uint8_t* mac, const uint8_t* data, int len) {
+    handleConfigAck(data, len);
+}
+#endif
+
 // ================= SETUP =================
 void setup() {
     Serial.begin(115200);
     delay(200);
     Serial.println(F("--- ESP32 HTTP/WiFi + ESP-NOW Master ---"));
+    Serial.print(F("sizeof(struct_config) = "));
+    Serial.println((int)sizeof(struct_config));
 
-    // WiFi STA wajib sebelum ESP-NOW (ESP-NOW memakai radio WiFi).
-    WiFi.mode(WIFI_STA);
-    pastikanWiFi();
+    // WiFi dari NVS dengan rollback + captive portal bila gagal.
+    bootWifi();
 
     // Sinkronkan waktu (NTP butuh internet; jika belum, dicoba lagi di loop()).
     sinkronWaktuNTP();
@@ -379,6 +706,7 @@ void setup() {
         logLine(F("Gagal inisialisasi ESP-NOW"));
         return;
     }
+    esp_now_register_recv_cb(onEspNowRecv);
 
     memcpy(peerInfo.peer_addr, macNodeMCU, 6);
     peerInfo.channel = 0;  
@@ -411,6 +739,7 @@ void setup() {
     if (WiFi.status() == WL_CONNECTED) {
         kirimUplinkSensor();
         laporStatusRelay(); // sinkronkan state relay server setelah reboot
+        reportStatus();     // laporkan revisi WiFi + hasil scan
         pollPerintah();
     } else {
         // WiFi belum siap: kirim segera begitu tersambung (jangan tunggu 60s).
@@ -420,11 +749,21 @@ void setup() {
     }
     waktuUplinkTerakhir = millis();
     waktuPollTerakhir = millis();
+    waktuStatusTerakhir = millis();
 }
 
 // ================= LOOP =================
 void loop() {
-    pastikanWiFi();
+    // Reconnect pasif memakai kredensial aktif (tanpa blokir lama).
+    if (WiFi.status() != WL_CONNECTED) {
+        static unsigned long terakhirCoba = 0;
+        if (millis() - terakhirCoba >= 10000) {
+            terakhirCoba = millis();
+            logLine(F("[WiFi] Terputus, menyambung ulang..."));
+            WiFi.begin(cfgSsid.c_str(), cfgPass.c_str());
+        }
+    }
+
     sinkronWaktuNTP(); // coba lagi sampai NTP berhasil
 
     unsigned long sekarang = millis();
@@ -433,6 +772,13 @@ void loop() {
     if (sekarang - waktuPollTerakhir >= POLL_INTERVAL) {
         waktuPollTerakhir = sekarang;
         pollPerintah();
+    }
+
+    // Status perangkat (WiFi/scan) tiap 60 detik atau segera setelah scan.
+    if (WiFi.status() == WL_CONNECTED &&
+        (scanPendingReport || sekarang - waktuStatusTerakhir >= 60000UL)) {
+        waktuStatusTerakhir = sekarang;
+        reportStatus();
     }
 
     // Uplink sensor tiap TX_INTERVAL detik (non-blocking).

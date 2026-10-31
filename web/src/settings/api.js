@@ -15,6 +15,8 @@ async function request(path, options = {}) {
     const message = (data && data.error) || `Request gagal (${res.status})`
     const err = new Error(message)
     err.status = res.status
+    // Penanda agar usePinGate bisa membuka modal PIN pada 401.
+    if (res.status === 401) err.code = 'PIN_INVALID'
     throw err
   }
   return data
@@ -37,4 +39,31 @@ export const putSettingsPin = (pin, newPin) =>
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', 'X-Settings-Pin': pin },
     body: JSON.stringify({ newPin }),
+  })
+
+// GET /api/settings/wifi -> { desired, devices, updatedAt, ready } (publik).
+export const getWifiSettings = () => request('/settings/wifi')
+
+// PUT /api/settings/wifi -> simpan + kirim ke perangkat.
+export const putWifiSettings = (pin, { ssid, password, force }) =>
+  request('/settings/wifi', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'X-Settings-Pin': pin },
+    body: JSON.stringify({ ssid, password, force }),
+  })
+
+// POST /api/settings/wifi/resend -> kirim ulang config tersimpan.
+export const resendWifiSettings = (pin, force = false) =>
+  request('/settings/wifi/resend', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Settings-Pin': pin },
+    body: JSON.stringify({ force }),
+  })
+
+// POST /api/settings/wifi/scan -> minta perangkat memindai SSID.
+export const scanWifi = (pin) =>
+  request('/settings/wifi/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Settings-Pin': pin },
+    body: JSON.stringify({}),
   })

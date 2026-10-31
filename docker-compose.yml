@@ -31,6 +31,7 @@ services:
     environment:
       - TZ=Asia/Jakarta
       - DEVICE_TOKEN=${DEVICE_TOKEN:?DEVICE_TOKEN wajib diisi di .env}
+      - IOT_INTERNAL_KEY=${IOT_INTERNAL_KEY:-}
       - INFLUXDB_URL=${INFLUXDB_URL:-http://influxdb:8086}
       - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:?INFLUXDB_TOKEN wajib diisi di .env}
 
@@ -50,6 +51,11 @@ services:
       IOT_API_URL: ${IOT_API_URL:-http://iot-api:3000/api/sensor-data?filter=realtime}
       IOT_API_KEY: ${IOT_API_KEY:-}
       IOT_TIMEOUT_MS: ${IOT_TIMEOUT_MS:-5000}
+      # Menu Settings > WiFi: kirim config ke perangkat lewat iot-api.
+      IOT_BASE: ${IOT_BASE:-http://iot-api:3000}
+      IOT_INTERNAL_KEY: ${IOT_INTERNAL_KEY:-}
+      DEVICE_TOKEN: ${DEVICE_TOKEN:-}
+      SETTINGS_SECRET: ${SETTINGS_SECRET:-}
     volumes:
       - ./hidro-data:/app/data
     healthcheck:

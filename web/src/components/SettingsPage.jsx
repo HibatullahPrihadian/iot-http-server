@@ -12,10 +12,11 @@ import PlanSection from './settings/PlanSection.jsx'
 import MonitoringSection from './settings/MonitoringSection.jsx'
 import ListrikSection from './settings/ListrikSection.jsx'
 import DeviceSection from './settings/DeviceSection.jsx'
+import WifiSection from './settings/WifiSection.jsx'
 import LimitsSection from './settings/LimitsSection.jsx'
 import SecuritySection from './settings/SecuritySection.jsx'
 
-// Seksi yang punya draft setting (SecuritySection tidak).
+// Seksi yang punya draft setting (SecuritySection & WifiSection tidak).
 const DRAFT_SECTIONS = SETTINGS_SECTIONS.filter((s) => s.settingKey)
 
 const SECTION_COMPONENTS = {
@@ -24,6 +25,7 @@ const SECTION_COMPONENTS = {
   monitoring: MonitoringSection,
   listrik: ListrikSection,
   perangkat: DeviceSection,
+  wifi: WifiSection,
   batas: LimitsSection,
   keamanan: SecuritySection,
 }
@@ -180,17 +182,19 @@ export default function SettingsPage() {
         onSave: () => handleSave(activeMeta.settingKey, drafts[activeKey]),
         onReset: () => resetSection(activeKey, activeMeta),
       }
-    : {
-        newPin,
-        confirmPin,
-        onNewPin: setNewPin,
-        onConfirmPin: setConfirmPin,
-        localError: pinLocalError,
-        busy: pinBusy,
-        pinIsDefault,
-        pinActive: gate.hasPin,
-        onSubmit: handleChangePin,
-      }
+    : activeKey === 'wifi'
+      ? { gate }
+      : {
+          newPin,
+          confirmPin,
+          onNewPin: setNewPin,
+          onConfirmPin: setConfirmPin,
+          localError: pinLocalError,
+          busy: pinBusy,
+          pinIsDefault,
+          pinActive: gate.hasPin,
+          onSubmit: handleChangePin,
+        }
 
   // Metadata tab untuk Tabs/BottomTabs (bentuk sama dengan tab Plan).
   const tabs = SETTINGS_SECTIONS.map(({ key, label, Icon }) => ({ key, label, Icon }))

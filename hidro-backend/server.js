@@ -12,6 +12,12 @@ const {
   isDefaultPin,
   setPin,
 } = require('./settings');
+const {
+  saveWifi,
+  getPublicWifiConfig,
+  getDeviceWifiPayload,
+  isReady: isWifiReady,
+} = require('./wifi');
 
 const app = express();
 const corsOrigins = (process.env.CORS_ORIGIN || '')
@@ -461,6 +467,128 @@ function requireSettingsPin(req, res, next) {
   clearPinFailures(req);
   next();
 }
+
+// ---------------------------------------------------------------------------
+// Settings > WiFi perangkat
+// ---------------------------------------------------------------------------
+
+// Base URL internal iot-api. Beda dari IOT_API_URL (URL lengkap endpoint
+// sensor) supaya perilaku fetch sensor tidak berubah.
+function iotBase() {
+  return (process.env.IOT_BASE || 'http://iot-api:3000').replace(/\/+$/, '');
+}
+
+// Panggil iot-api dengan header internal. Mengembalikan { ok, status, body, error }.
+async function iotRequest(path, { method = 'GET', body } = {}) {
+  const key = process.env.IOT_INTERNAL_KEY || '';
+  const headers = { 'Content-Type': 'application/json' };
+  if (key) headers['X-Internal-Key'] = key;
+  const deviceToken = process.env.DEVICE_TOKEN || '';
+  if (deviceToken) headers['X-Device-Token'] = deviceToken;
+
+  try {
+    const res = await fetch(`${iotBase()}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(Number(process.env.IOT_TIMEOUT_MS) || 5000),
+    });
+    const text = await res.text();
+    let json = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = null;
+    }
+    return { ok: res.ok, status: res.status, body: json, error: res.ok ? null : json?.message || `iot-api HTTP ${res.status}` };
+  } catch (err) {
+    return { ok: false, status: 0, body: null, error: `iot-api tidak terjangkau (${err.name || 'error'})` };
+  }
+}
+
+// GET /api/settings/wifi -> config publik + status perangkat (tanpa password).
+app.get('/api/settings/wifi', async (req, res) => {
+  try {
+    const desired = getPublicWifiConfig();
+    const ready = isWifiReady();
+    const statusRes = await iotRequest('/api/device/status');
+    res.json({
+      desired,
+      devices: statusRes.body?.devices || {},
+      updatedAt: statusRes.body?.updatedAt || null,
+      ready,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/settings/wifi -> simpan + kirim ke perangkat.
+// Body: { ssid, password?, force? }
+app.put('/api/settings/wifi', requireSettingsPin, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const saved = saveWifi({ ssid: body.ssid, password: body.password });
+    if (saved.error) {
+      const status = saved.error.includes('SETTINGS_SECRET') ? 503 : 400;
+      return res.status(status).json({ error: saved.error });
+    }
+
+    const payload = getDeviceWifiPayload(Boolean(body.force));
+    if (payload.error) return res.status(409).json({ error: payload.error });
+
+    const queued = await iotRequest('/api/device/config', {
+      method: 'POST',
+      body: payload.value,
+    });
+
+    res.json({
+      ok: true,
+      revision: saved.value.revision,
+      queued: queued.ok,
+      error: queued.ok ? null : queued.error || 'Config tersimpan tetapi belum terkirim ke perangkat.',
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/settings/wifi/resend -> kirim ulang config tersimpan tanpa menaikkan revisi.
+app.post('/api/settings/wifi/resend', requireSettingsPin, async (req, res) => {
+  try {
+    const payload = getDeviceWifiPayload(Boolean(req.body?.force));
+    if (payload.error) return res.status(409).json({ error: payload.error });
+    if (!payload.value) return res.status(404).json({ error: 'Belum ada config WiFi tersimpan' });
+
+    const queued = await iotRequest('/api/device/config', {
+      method: 'POST',
+      body: payload.value,
+    });
+    if (!queued.ok) {
+      return res.status(503).json({ error: queued.error || 'Gagal mengirim ke perangkat' });
+    }
+    res.json({ ok: true, revision: payload.value.revision, queued: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/settings/wifi/scan -> minta ESP32 memindai SSID sekitar.
+app.post('/api/settings/wifi/scan', requireSettingsPin, async (req, res) => {
+  try {
+    const result = await iotRequest('/api/device/config/scan', { method: 'POST', body: {} });
+    if (!result.ok) {
+      return res.status(503).json({ error: result.error || 'Gagal meminta scan' });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
 // GET /api/settings -> semua seksi setting + status PIN default.
 app.get('/api/settings', (req, res) => {
