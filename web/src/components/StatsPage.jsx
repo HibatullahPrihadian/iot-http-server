@@ -14,6 +14,7 @@ import {
 } from 'recharts'
 import { get } from '../api.js'
 import { nutritionAlert, formatPpm, formatPh, formatDateTime } from '../utils/status.js'
+import { useSettings } from '../settings/SettingsProvider.jsx'
 
 // Halaman statistik: panen per bulan, per tanaman, estimasi vs realisasi, keterisian.
 const AXIS_TICK = { fill: '#aeaeb2', fontSize: 12 }
@@ -30,6 +31,7 @@ const TOOLTIP_STYLE = {
 const LEGEND_STYLE = { wrapperStyle: { color: '#aeaeb2' } }
 
 export default function StatsPage() {
+  const { settings } = useSettings()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -81,7 +83,7 @@ export default function StatsPage() {
   const pct = Math.round(occupancy.ratio * 100)
 
   const latestReading = tankReadings.length ? tankReadings[0] : null
-  const tankAlert = nutritionAlert(latestReading, tankRecipe)
+  const tankAlert = nutritionAlert(latestReading, tankRecipe, settings.plan.ppmTolerancePct)
   // Ringkasan HSS/HST per tanaman (backend kirim `hssHstRealisasi`).
   const hssHst = Array.isArray(data.hssHstRealisasi) ? data.hssHstRealisasi : []
   // Grafik butuh data urut naik sesuai waktu.

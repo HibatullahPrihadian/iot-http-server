@@ -1,8 +1,12 @@
 import { countdownLabel } from '../utils/status.js'
+import { useSettings } from '../settings/SettingsProvider.jsx'
 
-// Panel reminder: batch siap panen / lewat (daysRemaining <= 1), kecuali Meja 3 (pembibitan, tak bisa panen).
+// Panel reminder: batch siap panen / lewat (daysRemaining <= harvestBannerDays),
+// kecuali Meja 3 (pembibitan, tak bisa panen).
 export default function HarvestBanner({ batches, onHarvest }) {
-  const due = batches.filter((b) => b.tableNumber !== 3 && b.daysRemaining <= 1)
+  const { settings } = useSettings()
+  const threshold = settings.plan.harvestBannerDays
+  const due = batches.filter((b) => b.tableNumber !== 3 && b.daysRemaining <= threshold)
   if (!due.length) return null
 
   return (

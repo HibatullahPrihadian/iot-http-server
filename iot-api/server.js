@@ -528,8 +528,11 @@ app.post('/api/relay/kontrol', (req, res) => {
 // Utamakan state in-memory yang dilaporkan perangkat (endpoint 10). Bila belum
 // pernah dilaporkan, fallback ke InfluxDB agar kompatibel dengan data lama.
 app.get('/api/relay/status', async (req, res) => {
+    // Info read-only untuk menu Settings (tanpa membocorkan token).
+    const deviceTokenConfigured = Boolean(DEVICE_TOKEN);
+
     if (relayState) {
-        return res.json({ success: true, data: relayState, source: 'device' });
+        return res.json({ success: true, data: relayState, source: 'device', deviceTokenConfigured });
     }
 
     const queryApi = client.getQueryApi(org);
@@ -566,7 +569,7 @@ app.get('/api/relay/status', async (req, res) => {
                 complete() { resolve(); },
             });
         });
-        res.json({ success: true, data: statusRelay });
+        res.json({ success: true, data: statusRelay, source: 'influx', deviceTokenConfigured });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }

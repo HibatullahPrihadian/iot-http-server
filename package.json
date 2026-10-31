@@ -1,7 +1,7 @@
 {
   "name": "iot-http-server",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Sistem monitoring IoT + plan tanam hidroponik (iot-api, hidro-backend, web)",
   "scripts": {
     "setup": "node scripts/install-hooks.mjs",
@@ -9,7 +9,8 @@
     "version:bump": "node scripts/version.mjs --bump",
     "version:check": "node scripts/check-version.mjs",
     "build:web": "npm --prefix web run build",
-    "test:hidro": "node hidro-backend/hsscheck.js"
+    "test:hidro": "node hidro-backend/hsscheck.js",
+    "test:settings": "node hidro-backend/settingscheck.js"
   },
   "engines": {
     "node": ">=20.19"

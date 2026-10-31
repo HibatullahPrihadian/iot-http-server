@@ -3,15 +3,18 @@ import { kontrolRelay } from './api.js'
 import { useToast } from './Toast.jsx'
 import { usePwaStatus } from '../../components/PwaStatus.jsx'
 import { useRelayStatus } from './useSensorData.js'
+import { useSettings } from '../../settings/SettingsProvider.jsx'
 
 // Panel 4 relay: tombol toggle ON/OFF + sinkron status dari InfluxDB.
 export default function RelayPanel() {
   const toast = useToast()
   const { online } = usePwaStatus()
+  const { settings } = useSettings()
   // Saat offline polling dihentikan: request pasti gagal dan status relay
   // hanya akan menampilkan nilai lama seolah masih berlaku.
   const { relays, setRelay } = useRelayStatus({ enabled: online })
   const [busyId, setBusyId] = useState(null)
+  const labels = settings.device.relayLabels
 
   async function toggle(idRelay) {
     const current = relays[`relay_${idRelay}`]
@@ -21,7 +24,7 @@ export default function RelayPanel() {
       const res = await kontrolRelay(idRelay, next)
       if (res.success) {
         setRelay(idRelay, next)
-        toast.success(`Relay ${idRelay} set to ${next}`)
+        toast.success(`${labels[idRelay - 1] || `Relay ${idRelay}`} set to ${next}`)
       } else {
         toast.error(res.message)
       }
@@ -44,7 +47,9 @@ export default function RelayPanel() {
             const on = status === 'ON'
             return (
               <div key={id} className="card-sub p-5 w-[200px] text-center">
-                <h4 className="mb-4 text-[#e5e5ea] font-medium">Relay {id}</h4>
+                <h4 className="mb-4 text-[#e5e5ea] font-medium">
+                  {labels[id - 1] || `Relay ${id}`}
+                </h4>
                 <button
                   type="button"
                   onClick={() => toggle(id)}

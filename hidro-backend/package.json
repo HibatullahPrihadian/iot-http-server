@@ -1,6 +1,6 @@
 {
   "name": "hidroponik-backend",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Backend API monitor hidroponik (Express + better-sqlite3)",
   "main": "server.js",
   "scripts": {

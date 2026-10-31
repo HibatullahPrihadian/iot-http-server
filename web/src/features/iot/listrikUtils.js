@@ -2,6 +2,10 @@
 // Paralel dengan utils.js (hidroponik), tetapi terpisah agar tidak mengganggu
 // chart/threshold hidroponik yang sudah teruji.
 
+import { DEFAULT_SETTINGS } from '../../settings/defaults.js'
+
+const DEFAULT_LISTRIK = DEFAULT_SETTINGS.listrik
+
 // Metrik listrik PZEM-004T -> metadata tampilan.
 export const PZEM_METRICS = {
   tegangan: {
@@ -186,20 +190,22 @@ export function computePzemYMax(values, meta) {
 }
 
 // Status alert metrik listrik (hanya anomali jelas).
-export function pzemAlertStatus(key, row) {
+// cfg berasal dari Settings > Listrik; opsional agar pemanggil lama tetap aman.
+export function pzemAlertStatus(key, row, cfg = DEFAULT_LISTRIK) {
   if (!row) return 'normal'
   const tegangan = pzemValueOrNull(row, 'tegangan')
   const pf = pzemValueOrNull(row, 'power_factor')
+  const c = cfg || DEFAULT_LISTRIK
 
   switch (key) {
     case 'tegangan':
       if (tegangan === null) return 'normal'
-      if (tegangan < 198 || tegangan > 242) return 'danger'
-      if (tegangan < 207 || tegangan > 235) return 'warning'
+      if (tegangan < c.voltageDangerLow || tegangan > c.voltageDangerHigh) return 'danger'
+      if (tegangan < c.voltageWarnLow || tegangan > c.voltageWarnHigh) return 'warning'
       return 'normal'
     case 'power_factor':
       if (pf === null) return 'normal'
-      if (pf > 0 && pf < 0.85) return 'warning'
+      if (pf > 0 && pf < c.powerFactorWarn) return 'warning'
       return 'normal'
     default:
       return 'normal'

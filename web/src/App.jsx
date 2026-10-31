@@ -13,6 +13,8 @@ import StatsPage from './components/StatsPage.jsx'
 import HistoryPage from './components/HistoryPage.jsx'
 import CatalogPage from './components/CatalogPage.jsx'
 import TankPanel from './components/TankPanel.jsx'
+import SettingsPage from './components/SettingsPage.jsx'
+import { SettingsProvider, useSettings } from './settings/SettingsProvider.jsx'
 import MonitoringPage from './features/iot/MonitoringPage.jsx'
 import TrendPage from './features/iot/TrendPage.jsx'
 import ListrikPage from './features/iot/ListrikPage.jsx'
@@ -211,77 +213,89 @@ function PlanLayout() {
   )
 }
 
-// Shell app: header top-level + routing Monitoring/Listrik/Plan.
+// Shell app: header top-level + routing Monitoring/Listrik/Plan/Settings.
 export default function App() {
+  const pwa = usePwa()
+
+  return (
+    <SettingsProvider>
+      <PwaProvider value={pwa}>
+        <AppShell pwa={pwa} />
+      </PwaProvider>
+    </SettingsProvider>
+  )
+}
+
+function AppShell({ pwa }) {
   const location = useLocation()
   const navigate = useNavigate()
-  const pwa = usePwa()
+  const { settings } = useSettings()
 
   const SECTIONS = [
     { key: 'monitoring', label: 'Monitoring', to: '/monitoring' },
     { key: 'listrik', label: 'Listrik', to: '/listrik' },
     { key: 'plan', label: 'Plan', to: '/plan' },
+    { key: 'settings', label: 'Settings', to: '/settings' },
   ]
 
   return (
-    <PwaProvider value={pwa}>
-      <div className="min-h-screen">
-        <OfflineBanner online={pwa.online} />
-        <header className="sticky top-0 z-30 bg-surface-bg/90 backdrop-blur border-b border-white/10">
-          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4 flex-wrap">
-            <div className="flex items-baseline gap-2">
-              <h1 className="text-lg font-bold text-text-hi">Hidroponik</h1>
-              <span
-                className="text-xs font-semibold text-text-low tabular-nums"
-                title="Versi aplikasi"
+    <>
+      <OfflineBanner online={pwa.online} />
+      <header className="sticky top-0 z-30 bg-surface-bg/90 backdrop-blur border-b border-white/10">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-baseline gap-2">
+            <h1 className="text-lg font-bold text-text-hi">{settings.general.farmName}</h1>
+            <span
+              className="text-xs font-semibold text-text-low tabular-nums"
+              title="Versi aplikasi"
+            >
+              v{APP_VERSION}
+            </span>
+            <InstallButton canInstall={pwa.canInstall} onInstall={pwa.promptInstall} />
+          </div>
+          <nav className="flex gap-1.5">
+          {SECTIONS.map((s) => {
+            const active = location.pathname.startsWith(s.to)
+            return (
+              <button
+                key={s.key}
+                type="button"
+                onClick={() => navigate(s.to)}
+                aria-current={active ? 'page' : undefined}
+                className={`inline-flex items-center whitespace-nowrap rounded-xl px-3.5 py-2 text-sm
+                  font-semibold transition active:scale-[0.97]
+                  ${
+                    active
+                      ? 'bg-ios-blue text-white shadow-glow-blue'
+                      : 'text-text-low hover:bg-white/5 hover:text-text-body'
+                  }`}
               >
-                v{APP_VERSION}
-              </span>
-              <InstallButton canInstall={pwa.canInstall} onInstall={pwa.promptInstall} />
-            </div>
-            <nav className="flex gap-1.5">
-            {SECTIONS.map((s) => {
-              const active = location.pathname.startsWith(s.to)
-              return (
-                <button
-                  key={s.key}
-                  type="button"
-                  onClick={() => navigate(s.to)}
-                  aria-current={active ? 'page' : undefined}
-                  className={`inline-flex items-center whitespace-nowrap rounded-xl px-3.5 py-2 text-sm
-                    font-semibold transition active:scale-[0.97]
-                    ${
-                      active
-                        ? 'bg-ios-blue text-white shadow-glow-blue'
-                        : 'text-text-low hover:bg-white/5 hover:text-text-body'
-                    }`}
-                >
-                  {s.label}
-                </button>
-              )
-            })}
-          </nav>
-        </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-4 py-6">
-        <Routes>
-          <Route path="/" element={<Navigate to="/monitoring" replace />} />
-          <Route path="/monitoring" element={<MonitoringPage />} />
-          <Route path="/monitoring/trend/:sensor" element={<TrendPage />} />
-          <Route path="/listrik" element={<ListrikPage />} />
-          <Route path="/listrik/trend/:metric" element={<ListrikTrendPage />} />
-          <Route path="/plan/*" element={<PlanLayout />} />
-          <Route path="*" element={<Navigate to="/monitoring" replace />} />
-        </Routes>
-      </main>
-
-      <UpdateBanner
-        needRefresh={pwa.needRefresh}
-        onApply={pwa.applyUpdate}
-        onDismiss={pwa.dismissUpdate}
-      />
+                {s.label}
+              </button>
+            )
+          })}
+        </nav>
       </div>
-    </PwaProvider>
+    </header>
+
+    <main className="max-w-7xl mx-auto px-4 py-6">
+      <Routes>
+        <Route path="/" element={<Navigate to="/monitoring" replace />} />
+        <Route path="/monitoring" element={<MonitoringPage />} />
+        <Route path="/monitoring/trend/:sensor" element={<TrendPage />} />
+        <Route path="/listrik" element={<ListrikPage />} />
+        <Route path="/listrik/trend/:metric" element={<ListrikTrendPage />} />
+        <Route path="/plan/*" element={<PlanLayout />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="*" element={<Navigate to="/monitoring" replace />} />
+      </Routes>
+    </main>
+
+    <UpdateBanner
+      needRefresh={pwa.needRefresh}
+      onApply={pwa.applyUpdate}
+      onDismiss={pwa.dismissUpdate}
+    />
+    </>
   )
 }

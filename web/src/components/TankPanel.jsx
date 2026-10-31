@@ -11,6 +11,7 @@ import {
   Legend,
 } from 'recharts'
 import { get, del } from '../api.js'
+import { useSettings } from '../settings/SettingsProvider.jsx'
 import {
   nutritionAlert,
   formatPpm,
@@ -65,6 +66,8 @@ function useChartHeight() {
 // resep aktif, pembacaan sensor IoT, ringkasan pengukuran manual, grafik tren,
 // dan riwayat pengukuran. Form tambah pengukuran & kalkulator dosis berada di modal.
 export default function TankPanel({ onGoCatalog }) {
+  const { settings } = useSettings()
+  const ppmTolerance = settings.plan.ppmTolerancePct
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [recipe, setRecipe] = useState(null)
@@ -127,10 +130,10 @@ export default function TankPanel({ onGoCatalog }) {
     }
   }
 
-  const alert = nutritionAlert(sensor, recipe)
+  const alert = nutritionAlert(sensor, recipe, ppmTolerance)
 
   const latestReading = readings.length ? readings[0] : null
-  const readingAlert = nutritionAlert(latestReading, recipe)
+  const readingAlert = nutritionAlert(latestReading, recipe, ppmTolerance)
 
   // Grafik butuh data urut naik sesuai waktu.
   // Label sumbu X diringkas (dd/MM HH:MM); label penuh dipakai di tooltip.

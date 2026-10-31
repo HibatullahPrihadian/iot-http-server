@@ -1,7 +1,17 @@
 const express = require('express');
 const cors = require('cors');
 const db = require('./db');
-const { upload, UPLOAD_DIR, removeFile } = require('./uploads');
+const { makeUpload, UPLOAD_DIR, removeFile } = require('./uploads');
+const {
+  getSetting,
+  setSetting,
+  getSettings,
+  updateSections,
+  initSettings,
+  verifyPin,
+  isDefaultPin,
+  setPin,
+} = require('./settings');
 
 const app = express();
 const corsOrigins = (process.env.CORS_ORIGIN || '')
@@ -23,7 +33,11 @@ const APP_VERSION = require('./package.json').version;
 
 const MS_PER_DAY = 86400000;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const MAX_NOTES = 2000;
+
+// Batas panjang catatan (bisa diubah di Settings > Batas & Unggahan).
+function maxNotes() {
+  return getSettings().limits.maxNotesChars;
+}
 
 // Tambah n hari ke string tanggal ISO 'YYYY-MM-DD' (UTC-safe, hindari geser timezone).
 function addDays(dateStr, n) {
@@ -154,8 +168,8 @@ function validateRecipePayload(body) {
   if (b.catatan !== null && b.catatan !== undefined && typeof b.catatan !== 'string') {
     return { error: 'catatan harus string' };
   }
-  if (typeof b.catatan === 'string' && b.catatan.length > MAX_NOTES) {
-    return { error: `catatan maksimal ${MAX_NOTES} karakter` };
+  if (typeof b.catatan === 'string' && b.catatan.length > maxNotes()) {
+    return { error: `catatan maksimal ${maxNotes()} karakter` };
   }
 
   return {
@@ -205,8 +219,8 @@ function validateReadingPayload(body) {
   if (catatan !== null && catatan !== undefined && typeof catatan !== 'string') {
     return { error: 'catatan harus string' };
   }
-  if (typeof catatan === 'string' && catatan.length > MAX_NOTES) {
-    return { error: `catatan maksimal ${MAX_NOTES} karakter` };
+  if (typeof catatan === 'string' && catatan.length > maxNotes()) {
+    return { error: `catatan maksimal ${maxNotes()} karakter` };
   }
 
   return {
@@ -236,7 +250,7 @@ function compute(row) {
   );
 
   let computedStatus;
-  if (row.tableNumber !== 3 && daysRemaining <= 3) {
+  if (row.tableNumber !== 3 && daysRemaining <= getSettings().plan.harvestReadyDays) {
     computedStatus = 'Siap Panen';
   } else if (activePhase(row) === 'Pembesaran') {
     computedStatus = 'Pembesaran';
@@ -264,29 +278,13 @@ function compute(row) {
 // ---------------------------------------------------------------------------
 
 const SETTING_ACTIVE_TANK_RECIPE = 'activeTankRecipeId';
-// Sensor dianggap basi bila lebih tua dari 5 menit.
-const SENSOR_STALE_MS = 5 * 60 * 1000;
+// Sensor dianggap basi bila lebih tua dari batas Settings > Monitoring.
+function sensorStaleMs() {
+  return getSettings().monitoring.onlineWindowMinutes * 60 * 1000;
+}
 // Cache respons sensor: sukses 20 s, gagal 5 s (cepat pulih).
 const SENSOR_CACHE_OK_MS = 20000;
 const SENSOR_CACHE_FAIL_MS = 5000;
-
-// Baca nilai setting (null bila belum ada).
-function getSetting(key) {
-  const row = db.prepare('SELECT value FROM AppSetting WHERE key = ?').get(key);
-  return row ? row.value : null;
-}
-
-// Simpan/hapus setting (upsert; value null -> hapus baris).
-function setSetting(key, value) {
-  if (value === null || value === undefined) {
-    db.prepare('DELETE FROM AppSetting WHERE key = ?').run(key);
-    return;
-  }
-  db.prepare(
-    `INSERT INTO AppSetting (key, value) VALUES (?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-  ).run(key, String(value));
-}
 
 // Resep tangki aktif + nama tanaman; null bila belum diset atau resep sudah hilang.
 function getActiveTankRecipe() {
@@ -370,7 +368,7 @@ async function getTankSensor() {
 function withStale(sensor, error) {
   if (!sensor) return { sensor: null, sensorError: error || 'Data sensor tidak tersedia' };
   const t = sensor.waktu ? new Date(sensor.waktu).getTime() : NaN;
-  const stale = !Number.isFinite(t) || Date.now() - t > SENSOR_STALE_MS;
+  const stale = !Number.isFinite(t) || Date.now() - t > sensorStaleMs();
   return { sensor: { ...sensor, stale }, sensorError: null };
 }
 
@@ -391,6 +389,111 @@ app.get('/api/health', (req, res) => {
 // GET /api/version -> versi aplikasi yang sedang berjalan.
 app.get('/api/version', (req, res) => {
   res.json({ version: APP_VERSION, service: 'hidro-backend' });
+});
+
+// ---------------------------------------------------------------------------
+// Menu Settings
+// ---------------------------------------------------------------------------
+
+// Rate limit sederhana in-memory untuk percobaan PIN salah: 10 gagal / 15 menit
+// per IP. Cukup untuk satu instance backend (deploy sekarang single container).
+const PIN_WINDOW_MS = 15 * 60 * 1000;
+const PIN_MAX_FAILURES = 10;
+// Batas jumlah key yang dilacak agar map tidak tumbuh tanpa batas.
+const PIN_MAX_TRACKED_KEYS = 1000;
+const pinFailures = new Map();
+
+// Kunci memakai alamat socket (tidak bisa dipalsukan klien), BUKAN
+// X-Forwarded-For yang bisa diisi bebas. Di belakang nginx semua klien berbagi
+// bucket yang sama; itu lebih aman daripada limiter yang bisa dilewati.
+function pinClientKey(req) {
+  return req.socket?.remoteAddress || 'unknown';
+}
+
+function prunePinFailures(now) {
+  for (const [key, entry] of pinFailures) {
+    if (now - entry.firstAt > PIN_WINDOW_MS) pinFailures.delete(key);
+  }
+  if (pinFailures.size <= PIN_MAX_TRACKED_KEYS) return;
+  const excess = pinFailures.size - PIN_MAX_TRACKED_KEYS;
+  const oldest = [...pinFailures.entries()]
+    .sort((a, b) => a[1].firstAt - b[1].firstAt)
+    .slice(0, excess);
+  for (const [key] of oldest) pinFailures.delete(key);
+}
+
+function pinRateLimited(req) {
+  const entry = pinFailures.get(pinClientKey(req));
+  if (!entry) return false;
+  if (Date.now() - entry.firstAt > PIN_WINDOW_MS) {
+    pinFailures.delete(pinClientKey(req));
+    return false;
+  }
+  return entry.count >= PIN_MAX_FAILURES;
+}
+
+function recordPinFailure(req) {
+  const now = Date.now();
+  const key = pinClientKey(req);
+  const entry = pinFailures.get(key);
+  if (!entry || now - entry.firstAt > PIN_WINDOW_MS) {
+    pinFailures.set(key, { count: 1, firstAt: now });
+  } else {
+    entry.count += 1;
+  }
+  prunePinFailures(now);
+}
+
+function clearPinFailures(req) {
+  pinFailures.delete(pinClientKey(req));
+}
+
+// Semua penulisan settings wajib menyertakan header X-Settings-Pin.
+function requireSettingsPin(req, res, next) {
+  if (pinRateLimited(req)) {
+    return res.status(429).json({ error: 'Terlalu banyak percobaan PIN. Coba lagi nanti.' });
+  }
+  const pin = req.get('x-settings-pin');
+  if (!verifyPin(pin || '')) {
+    recordPinFailure(req);
+    return res.status(401).json({ error: 'PIN salah' });
+  }
+  clearPinFailures(req);
+  next();
+}
+
+// GET /api/settings -> semua seksi setting + status PIN default.
+app.get('/api/settings', (req, res) => {
+  try {
+    res.json({ settings: getSettings(), pinIsDefault: isDefaultPin() });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/settings -> simpan seksi yang dikirim (body: { plan: {...}, ... }).
+app.put('/api/settings', requireSettingsPin, (req, res) => {
+  try {
+    const result = updateSections(req.body);
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json({ settings: result.value });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/settings/pin -> ganti PIN settings { newPin }.
+app.put('/api/settings/pin', requireSettingsPin, (req, res) => {
+  try {
+    const result = setPin(req.body?.newPin);
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json({ ok: true, pinIsDefault: isDefaultPin() });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 // GET /api/catalog -> semua tanaman + flag hasRecipe (ada resep RCP).
@@ -919,8 +1022,8 @@ app.post('/api/batches/:id/harvest', (req, res) => {
       }
     }
     const notes = typeof req.body?.notes === 'string' ? req.body.notes : batch.notes;
-    if (typeof notes === 'string' && notes.length > MAX_NOTES) {
-      return res.status(400).json({ error: `notes maksimal ${MAX_NOTES} karakter` });
+    if (typeof notes === 'string' && notes.length > maxNotes()) {
+      return res.status(400).json({ error: `notes maksimal ${maxNotes()} karakter` });
     }
     const now = nowISO();
 
@@ -1080,8 +1183,8 @@ app.put('/api/batches/:id/notes', (req, res) => {
     if (notes !== null && notes !== undefined && typeof notes !== 'string') {
       return res.status(400).json({ error: 'notes harus string atau null' });
     }
-    if (typeof notes === 'string' && notes.length > MAX_NOTES) {
-      return res.status(400).json({ error: `notes maksimal ${MAX_NOTES} karakter` });
+    if (typeof notes === 'string' && notes.length > maxNotes()) {
+      return res.status(400).json({ error: `notes maksimal ${maxNotes()} karakter` });
     }
 
     db.prepare('UPDATE PlantBatch SET notes = ? WHERE id = ?').run(
@@ -1105,10 +1208,12 @@ function imageRows(batchId) {
 
 // POST /api/batches/:id/images -> upload gambar (multipart field "image").
 app.post('/api/batches/:id/images', (req, res) => {
+  const limits = getSettings().limits;
+  const upload = makeUpload(limits.maxImageMb * 1024 * 1024);
   upload.single('image')(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: 'Ukuran gambar maksimal 5MB' });
+        return res.status(400).json({ error: `Ukuran gambar maksimal ${limits.maxImageMb}MB` });
       }
       return res.status(err.status || 400).json({ error: err.message || 'Upload gagal' });
     }
@@ -1130,14 +1235,15 @@ app.post('/api/batches/:id/images', (req, res) => {
       }
 
       // Cek jumlah + insert dalam satu transaksi (better-sqlite3 sinkron) agar
-      // dua upload bersamaan tidak sama-sama lolos batas 5 gambar/batch.
+      // dua upload bersamaan tidak sama-sama lolos batas gambar per batch.
+      const maxImages = limits.maxImagesPerBatch;
       let inserted = null;
       let limitReached = false;
       db.transaction(() => {
         const count = db
           .prepare('SELECT COUNT(*) AS n FROM BatchImage WHERE batchId = ?')
           .get(id).n;
-        if (count >= 5) {
+        if (count >= maxImages) {
           limitReached = true;
           return;
         }
@@ -1149,7 +1255,7 @@ app.post('/api/batches/:id/images', (req, res) => {
 
       if (limitReached) {
         removeFile(req.file.filename);
-        return res.status(409).json({ error: 'Maksimal 5 gambar per batch' });
+        return res.status(409).json({ error: `Maksimal ${maxImages} gambar per batch` });
       }
 
       res.status(201).json({ ...inserted, url: `/uploads/${inserted.filename}` });
@@ -1568,6 +1674,8 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 5000;
+// Seed PIN default bila belum ada (peringatan dicetak saat masih default).
+initSettings();
 app.listen(PORT, () => {
   console.log(`Backend hidroponik jalan di port ${PORT}`);
 });

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useSensorData } from './useSensorData.js'
 import { useToast } from './Toast.jsx'
 import { usePwaStatus } from '../../components/PwaStatus.jsx'
+import { useSettings } from '../../settings/SettingsProvider.jsx'
 import SummaryCard from './SummaryCard.jsx'
 import SensorChart from './SensorChart.jsx'
 import ActuatorPanel from './ActuatorPanel.jsx'
@@ -35,14 +36,23 @@ export default function MonitoringPage() {
   const navigate = useNavigate()
   const toast = useToast()
   const { online: networkOnline } = usePwaStatus()
+  const { settings } = useSettings()
   const now = useClock()
   const [filter, setFilter] = useState('realtime')
   // Saat offline, polling dihentikan: request pasti gagal dan hanya membuat
   // status "Online" dari data lama menyesatkan.
-  const { data, loading, error } = useSensorData({ filter, enabled: networkOnline })
+  const { data, loading, error } = useSensorData({
+    filter,
+    enabled: networkOnline,
+    pollMs: settings.monitoring.pollHidroSeconds * 1000,
+  })
 
   const latest = data.length ? data[data.length - 1] : null
-  const status = connectionState(latest?.waktu, networkOnline)
+  const status = connectionState(
+    latest?.waktu,
+    networkOnline,
+    settings.monitoring.onlineWindowMinutes * 60000
+  )
   const online = status === 'online'
   const labels = data.map((row) => timeLabel(row.waktu))
 

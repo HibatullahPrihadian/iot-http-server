@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useSensorData } from './useSensorData.js'
 import SensorChart from './SensorChart.jsx'
+import { useSettings } from '../../settings/SettingsProvider.jsx'
 import {
   SENSORS,
   TREND_FILTERS,
@@ -26,8 +27,12 @@ export default function TrendPage() {
   const navigate = useNavigate()
   const sensorKey = SENSORS[sensor] ? sensor : 'suhu_udara'
   const [filter, setFilter] = useState('realtime')
+  const { settings } = useSettings()
 
-  const { data } = useSensorData({ filter: trendFilterToApi(filter) })
+  const { data } = useSensorData({
+    filter: trendFilterToApi(filter),
+    pollMs: settings.monitoring.pollHidroSeconds * 1000,
+  })
 
   const meta = SENSORS[sensorKey]
   const labels = useMemo(() => data.map((row) => dateTimeLabel(row.waktu)), [data])

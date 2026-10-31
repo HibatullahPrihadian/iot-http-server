@@ -7,6 +7,9 @@ const multer = require('multer');
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, 'data', 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
+// Batas keras: setting maxImageMb dibatasi 20 MB (lihat settings.js), jangan lewat.
+const HARD_MAX_BYTES = 20 * 1024 * 1024;
+
 const ALLOWED = {
   'image/jpeg': '.jpg',
   'image/png': '.png',
@@ -30,11 +33,15 @@ function fileFilter(req, file, cb) {
   cb(err);
 }
 
-const upload = multer({
-  storage,
-  fileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 },
-});
+// Instance multer dengan batas ukuran dari setting (Settings > Batas & Unggahan).
+function makeUpload(maxBytes) {
+  const limit = Number.isFinite(maxBytes) && maxBytes > 0 ? maxBytes : HARD_MAX_BYTES;
+  return multer({
+    storage,
+    fileFilter,
+    limits: { fileSize: Math.min(limit, HARD_MAX_BYTES) },
+  });
+}
 
 // Helper hapus file fisik (abaikan bila sudah hilang).
 function removeFile(filename) {
@@ -43,4 +50,4 @@ function removeFile(filename) {
   fs.rm(full, { force: true }, () => {});
 }
 
-module.exports = { upload, UPLOAD_DIR, removeFile };
+module.exports = { makeUpload, UPLOAD_DIR, removeFile };

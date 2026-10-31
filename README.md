@@ -157,10 +157,13 @@ Detail kontrak HTTP + token ada di [`dokumentasi.md`](dokumentasi.md).
 | POST | `/api/batches/:id/transfer` | Pindah Meja 3 → Meja 1/2: `{ toPipes: [{toTable,toPipe}], transplantDate? }` (default hari ini) |
 | GET | `/api/batches/history` | Riwayat arsip + `hss`/`hst` beku di tanggal panen; filter `tableNumber, pipeNumber, plantId, from, to, limit, offset` |
 | PUT | `/api/batches/:id/notes` | Set/hapus catatan: `{ notes }` |
-| POST | `/api/batches/:id/images` | Upload gambar (multipart field `image`, maks 5MB, maks 5/batch) |
+| POST | `/api/batches/:id/images` | Upload gambar (multipart field `image`; batas ukuran & jumlah dari Settings, default 5MB / 5 per batch) |
 | GET | `/api/batches/:id/images` | Daftar gambar batch |
 | DELETE | `/api/batches/:id/images/:imageId` | Hapus gambar + file fisik |
 | GET | `/api/stats/summary` | `{ harvestByMonth, harvestByPlant, estimasiVsRealisasi, hssHstRealisasi, occupancy }` |
+| GET | `/api/settings` | Semua setting menu Settings + `pinIsDefault` |
+| PUT | `/api/settings` | Simpan seksi setting (butuh header `X-Settings-Pin`) |
+| PUT | `/api/settings/pin` | Ganti PIN: `{ newPin }` (butuh header `X-Settings-Pin`) |
 
 #### RCP (resep nutrisi)
 

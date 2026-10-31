@@ -1,29 +1,53 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { kontrolPompa, kontrolInterval, kontrolAutodosing } from './api.js'
 import { useToast } from './Toast.jsx'
+import { useSettings } from '../../settings/SettingsProvider.jsx'
 
-const INTERVAL_OPTIONS = [
-  { value: 60, label: '1 Menit' },
-  { value: 180, label: '3 Menit' },
-  { value: 300, label: '5 Menit' },
-  { value: 600, label: '10 Menit' },
-]
+// Label opsi interval: menit bila kelipatan 60, selain itu detik.
+function intervalLabel(seconds) {
+  const s = Number(seconds)
+  if (!Number.isFinite(s)) return `${seconds} Detik`
+  if (s >= 60 && s % 60 === 0) return `${s / 60} Menit`
+  return `${s} Detik`
+}
 
 // Panel aktuator: 1 pompa (AB Mix) + interval uplink + auto dosing.
 // Pompa utama kini dikendalikan lewat Relay 1, bukan dari panel ini.
+// Nilai awal diambil dari Settings > Perangkat.
 export default function ActuatorPanel() {
   const toast = useToast()
+  const { settings } = useSettings()
+  const device = settings.device
 
   const [durasiB, setDurasiB] = useState('10')
   const [busyPompa, setBusyPompa] = useState(false)
 
-  const [intervalDetik, setIntervalDetik] = useState('60')
+  const [intervalDetik, setIntervalDetik] = useState(String(device.uplinkIntervalSeconds))
   const [busyInterval, setBusyInterval] = useState(false)
 
-  const [targetTds, setTargetTds] = useState('800')
-  const [volumeAir, setVolumeAir] = useState('180')
-  const [konstanta, setKonstanta] = useState('160')
+  const [targetTds, setTargetTds] = useState(String(device.dosingTargetPpm))
+  const [volumeAir, setVolumeAir] = useState(String(device.dosingVolumeLiters))
+  const [konstanta, setKonstanta] = useState(String(device.dosingConstant))
   const [busyDosing, setBusyDosing] = useState(false)
+
+  // Settings dimuat asinkron: sinkronkan nilai awal saat data server tiba.
+  useEffect(() => {
+    setIntervalDetik(String(device.uplinkIntervalSeconds))
+  }, [device.uplinkIntervalSeconds])
+  useEffect(() => {
+    setTargetTds(String(device.dosingTargetPpm))
+  }, [device.dosingTargetPpm])
+  useEffect(() => {
+    setVolumeAir(String(device.dosingVolumeLiters))
+  }, [device.dosingVolumeLiters])
+  useEffect(() => {
+    setKonstanta(String(device.dosingConstant))
+  }, [device.dosingConstant])
+
+  // Pastikan interval tersimpan selalu ada di daftar opsi.
+  const intervalOptions = Array.from(
+    new Set([...device.uplinkIntervalOptions, device.uplinkIntervalSeconds].map(Number))
+  ).sort((a, b) => a - b)
 
   async function kirimPompa(durasi) {
     const d = parseInt(durasi, 10)
@@ -90,7 +114,7 @@ export default function ActuatorPanel() {
               <input
                 type="number"
                 min="1"
-                max="600"
+                max={device.maxPumpSeconds}
                 value={durasiB}
                 onChange={(e) => setDurasiB(e.target.value)}
                 placeholder="Detik"
@@ -126,9 +150,9 @@ export default function ActuatorPanel() {
                 onChange={(e) => setIntervalDetik(e.target.value)}
                 className="input-ios w-full mb-4"
               >
-                {INTERVAL_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value} className="bg-neutral-900">
-                    {o.label}
+                {intervalOptions.map((o) => (
+                  <option key={o} value={o} className="bg-neutral-900">
+                    {intervalLabel(o)}
                   </option>
                 ))}
               </select>

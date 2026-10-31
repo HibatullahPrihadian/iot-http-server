@@ -1,4 +1,6 @@
 // Warna & label untuk tiap status pipa.
+import { DEFAULT_SETTINGS } from '../settings/defaults.js'
+
 const STATUS_STYLES = {
   Semai: 'bg-ios-green/85 text-white',
   Pembesaran: 'bg-ios-blue/85 text-white',
@@ -83,12 +85,15 @@ export const LEGEND = [
 // RCP (resep nutrisi)
 // ---------------------------------------------------------------------------
 
-const PPM_TOLERANCE = 0.1
-
+// Toleransi ppm default (Settings > Plan menyimpan dalam persen).
+const PPM_TOLERANCE_PCT = DEFAULT_SETTINGS.plan.ppmTolerancePct
 // Bandingkan pembacaan terakhir vs resep fase aktif.
+// tolerancePct: penyimpangan ppm yang masih dianggap aman (default 10%).
 // Mengembalikan { level: 'ok'|'warn'|'danger', reasons: string[] }.
-export function nutritionAlert(reading, recipe) {
+export function nutritionAlert(reading, recipe, tolerancePct = PPM_TOLERANCE_PCT) {
   if (!reading || !recipe) return { level: 'ok', reasons: [] }
+
+  const tolerance = Number.isFinite(Number(tolerancePct)) ? Number(tolerancePct) / 100 : PPM_TOLERANCE_PCT / 100
 
   const reasons = []
   let level = 'ok'
@@ -100,7 +105,7 @@ export function nutritionAlert(reading, recipe) {
     reading.ppm !== undefined
   ) {
     const diff = Math.abs(reading.ppm - recipe.ppmTarget)
-    if (diff > recipe.ppmTarget * PPM_TOLERANCE) {
+    if (diff > recipe.ppmTarget * tolerance) {
       const pct = recipe.ppmTarget
         ? Math.round((diff / recipe.ppmTarget) * 100)
         : 0

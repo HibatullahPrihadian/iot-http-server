@@ -3,6 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { useSensorData } from './useSensorData.js'
 import { useToast } from './Toast.jsx'
 import { usePwaStatus } from '../../components/PwaStatus.jsx'
+import { useSettings } from '../../settings/SettingsProvider.jsx'
+import usePinGate from '../../settings/usePinGate.js'
+import PinPromptModal from '../../settings/PinPromptModal.jsx'
 import PzemChart from './PzemChart.jsx'
 import PzemTable from './PzemTable.jsx'
 import { connectionState, lastUpdateLabel, FILTERS, timeLabel } from './utils.js'
@@ -20,9 +23,6 @@ import {
   pzemValueOrNull,
 } from './listrikUtils.js'
 
-const TARIFF_STORAGE_KEY = 'listrik_tariff'
-const DEFAULT_TARIFF = 1444.7
-
 // Jam realtime (paralel MonitoringPage).
 function useClock() {
   const [now, setNow] = useState(new Date())
@@ -36,7 +36,8 @@ function useClock() {
 // Kartu ringkasan 1 metrik listrik.
 function PzemCard({ metricKey, row, onOpenTrend }) {
   const meta = PZEM_METRICS[metricKey]
-  const status = pzemAlertStatus(metricKey, row)
+  const { settings } = useSettings()
+  const status = pzemAlertStatus(metricKey, row, settings.listrik)
   const value = pzemValueOrNull(row, metricKey)
 
   return (
@@ -69,24 +70,36 @@ export default function ListrikPage() {
   const navigate = useNavigate()
   const toast = useToast()
   const { online: networkOnline } = usePwaStatus()
+  const { settings, saveSection } = useSettings()
+  const gate = usePinGate()
   const now = useClock()
   const [filter, setFilter] = useState('realtime')
-  const [tariffInput, setTariffInput] = useState(() => {
-    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(TARIFF_STORAGE_KEY) : null
-    return saved !== null ? saved : String(DEFAULT_TARIFF)
-  })
+  // Tarif awal dari server; input lokal jadi pratinjau sampai disimpan.
+  const [tariffInput, setTariffInput] = useState(() => String(settings.listrik.tariffPerKwh))
+  const [tariffEdited, setTariffEdited] = useState(false)
+  const [savingTariff, setSavingTariff] = useState(false)
+
+  // Settings dimuat asinkron: sinkronkan tarif setelah data server tiba, kecuali
+  // user sudah mengedit input.
+  useEffect(() => {
+    if (!tariffEdited) setTariffInput(String(settings.listrik.tariffPerKwh))
+  }, [settings.listrik.tariffPerKwh, tariffEdited])
   // Data PZEM dikirim ~1 Hz, tapi query InfluxDB-nya berat: poll 1 detik
   // membuat request saling menyusul. 2 detik + anti-pileup di useSensorData
   // membuat dashboard tetap terasa realtime tanpa membebani server.
   const { data, loading, error, energy } = useSensorData({
     filter,
     domain: 'listrik',
-    pollMs: 2000,
+    pollMs: settings.monitoring.pollListrikSeconds * 1000,
     enabled: networkOnline,
   })
 
   const latest = data.length ? data[data.length - 1] : null
-  const status = connectionState(latest?.waktu, networkOnline)
+  const status = connectionState(
+    latest?.waktu,
+    networkOnline,
+    settings.monitoring.onlineWindowMinutes * 60000
+  )
   const online = status === 'online'
   const labels = data.map((row) => timeLabel(row.waktu))
 
@@ -97,10 +110,25 @@ export default function ListrikPage() {
   const cost = useMemo(() => estimateCost(delta, tariff), [delta, tariff])
   const periodeLabel = formatPeriode(energy?.from, energy?.to)
 
-  useEffect(() => {
-    if (typeof localStorage === 'undefined') return
-    localStorage.setItem(TARIFF_STORAGE_KEY, tariffInput)
-  }, [tariffInput])
+  // Jalan pintas: simpan tarif ke server (butuh PIN Settings).
+  async function saveTariff() {
+    setSavingTariff(true)
+    try {
+      const value = parseTariff(tariffInput)
+      await gate.guarded(
+        (pinOverride) =>
+          saveSection('listrik', { ...settings.listrik, tariffPerKwh: value }, pinOverride),
+        () => {
+          setTariffEdited(false)
+          toast.success('Tarif tersimpan.')
+        }
+      )
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setSavingTariff(false)
+    }
+  }
 
   function handleExport() {
     const ok = downloadPzemCSV(data, filter)
@@ -203,14 +231,28 @@ export default function ListrikPage() {
             <label className="font-semibold mb-2 text-text-low text-xs uppercase tracking-[0.5px]">
               Tarif (Rp/kWh)
             </label>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={tariffInput}
-              onChange={(e) => setTariffInput(e.target.value)}
-              className="input-ios min-w-[180px]"
-            />
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={tariffInput}
+                onChange={(e) => {
+                  setTariffEdited(true)
+                  setTariffInput(e.target.value)
+                }}
+                className="input-ios min-w-[180px]"
+              />
+              <button
+                type="button"
+                onClick={saveTariff}
+                disabled={savingTariff}
+                className="btn-ios shrink-0 bg-white/10 text-ios-blue text-sm font-semibold px-3 py-2.5
+                  hover:bg-ios-blue/15 disabled:opacity-60"
+              >
+                {savingTariff ? '...' : 'Simpan'}
+              </button>
+            </div>
           </div>
         </div>
         {delta === null && (
@@ -252,6 +294,8 @@ export default function ListrikPage() {
 
       {/* Tabel riwayat */}
       {!loading && <PzemTable data={data} />}
+
+      <PinPromptModal gate={gate} />
     </div>
   )
 }

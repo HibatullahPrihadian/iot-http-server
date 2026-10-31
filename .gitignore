@@ -7,6 +7,10 @@ build/
 .env
 .env.*
 !.env.example
+# Kredensial firmware ESP (WiFi + DEVICE_TOKEN)
+secrets.h
+secrets*.h
+!secrets.h.example
 
 # Data persisten (jangan commit: DB, InfluxDB, Node-RED, uploads)
 data/

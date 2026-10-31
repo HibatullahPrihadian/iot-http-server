@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { get, put, del, uploadImage } from '../api.js'
+import { useSettings } from '../settings/SettingsProvider.jsx'
 
-const MAX_BYTES = 5 * 1024 * 1024
-const MAX_IMAGES = 5
 const ALLOWED = ['image/jpeg', 'image/png', 'image/webp']
 
 // Catatan teks + galeri gambar untuk satu batch.
 export default function NotesImages({ batch, onChanged }) {
+  const { settings } = useSettings()
+  const maxImages = settings.limits.maxImagesPerBatch
+  const maxBytes = settings.limits.maxImageMb * 1024 * 1024
+  const maxNotes = settings.limits.maxNotesChars
   const [notes, setNotes] = useState(batch.notes || '')
   const [images, setImages] = useState([])
   const [savingNotes, setSavingNotes] = useState(false)
@@ -57,12 +60,12 @@ export default function NotesImages({ batch, onChanged }) {
       setError('Hanya JPG, PNG, atau WEBP yang diizinkan')
       return
     }
-    if (file.size > MAX_BYTES) {
-      setError('Ukuran gambar maksimal 5MB')
+    if (file.size > maxBytes) {
+      setError(`Ukuran gambar maksimal ${settings.limits.maxImageMb}MB`)
       return
     }
-    if (images.length >= MAX_IMAGES) {
-      setError('Maksimal 5 gambar per batch')
+    if (images.length >= maxImages) {
+      setError(`Maksimal ${maxImages} gambar per batch`)
       return
     }
 
@@ -98,11 +101,12 @@ export default function NotesImages({ batch, onChanged }) {
 
       <div>
         <label className="block text-sm font-medium text-mid mb-1">Catatan</label>
-        <textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          rows={2}
-          placeholder="Misal: daun menguning, tambah nutrisi..."
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={2}
+            maxLength={maxNotes}
+            placeholder="Misal: daun menguning, tambah nutrisi..."
           className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 text-sm
             text-text-body placeholder:text-text-low
             focus:outline-none focus:border-ios-blue focus:ring-2 focus:ring-ios-blue/30"
@@ -121,12 +125,12 @@ export default function NotesImages({ batch, onChanged }) {
       <div>
         <div className="flex items-center justify-between mb-1">
           <span className="text-sm font-medium text-mid">
-            Gambar ({images.length}/{MAX_IMAGES})
+            Gambar ({images.length}/{maxImages})
           </span>
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            disabled={uploading || images.length >= MAX_IMAGES}
+            disabled={uploading || images.length >= maxImages}
             className="btn-ios bg-ios-green hover:shadow-glow-green disabled:opacity-60
               text-white text-xs px-3 py-1.5"
           >

@@ -1,9 +1,11 @@
 import { SENSORS, alertStatus, alertCardClass, alertValueClass, formatSensor } from './utils.js'
+import { useSettings } from '../../settings/SettingsProvider.jsx'
 
 // Kartu ringkasan 1 sensor + status alert. Klik -> buka trend.
 export default function SummaryCard({ sensorKey, row, onOpenTrend }) {
   const meta = SENSORS[sensorKey]
-  const status = alertStatus(sensorKey, row)
+  const { settings } = useSettings()
+  const status = alertStatus(sensorKey, row, settings.monitoring.thresholds)
 
   return (
     <button

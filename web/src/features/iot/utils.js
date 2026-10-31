@@ -1,5 +1,10 @@
 // Konstanta + helper murni untuk dashboard IoT.
 // Semua threshold/bound diambil persis dari web-app/public/index.html (baris 90-108, 493-498, 530-535).
+// Nilai default alert kini berasal dari Settings (lihat settings/defaults.js).
+
+import { DEFAULT_SETTINGS } from '../../settings/defaults.js'
+
+const DEFAULT_THRESHOLDS = DEFAULT_SETTINGS.monitoring.thresholds
 
 // Sensor key -> metadata tampilan.
 export const SENSORS = {
@@ -193,9 +198,13 @@ export function formatSensor(row, key) {
   return meta.unit ? `${val} ${meta.unit}` : String(val)
 }
 
-// Status alert per sensor (port persis dari index.html baris 530-535).
-export function alertStatus(key, row) {
+// Status alert per sensor. Threshold berasal dari Settings > Monitoring;
+// parameter opsional agar pemanggil lama tetap memakai default.
+export function alertStatus(key, row, thresholds = DEFAULT_THRESHOLDS) {
   if (!row) return 'normal'
+  const t = thresholds?.[key] ?? DEFAULT_THRESHOLDS[key]
+  if (!t) return 'normal'
+
   const suhuAir = sensorValue(row, 'suhu_air')
   const suhuUdara = sensorValue(row, 'suhu_udara')
   const tds = sensorValue(row, 'kadar_tds')
@@ -205,24 +214,24 @@ export function alertStatus(key, row) {
 
   switch (key) {
     case 'suhu_air':
-      if (suhuAir >= 30) return 'danger'
-      if (suhuAir > 28) return 'warning'
+      if (suhuAir >= t.danger) return 'danger'
+      if (suhuAir > t.warn) return 'warning'
       return 'normal'
     case 'suhu_udara':
-      if (suhuUdara >= 35) return 'danger'
-      if (suhuUdara > 32) return 'warning'
+      if (suhuUdara >= t.danger) return 'danger'
+      if (suhuUdara > t.warn) return 'warning'
       return 'normal'
     case 'kadar_tds':
-      if (tds <= 500 || tds >= 1500) return 'danger'
-      if (tds < 700 || tds > 1300) return 'warning'
+      if (tds <= t.dangerLow || tds >= t.dangerHigh) return 'danger'
+      if (tds < t.warnLow || tds > t.warnHigh) return 'warning'
       return 'normal'
     case 'kelembapan_udara':
-      if (lembap <= 40 || lembap >= 80) return 'danger'
+      if (lembap <= t.dangerLow || lembap >= t.dangerHigh) return 'danger'
       return 'normal'
     case 'kadar_ph':
-      return ph < 5.5 || ph > 6.5 ? 'danger' : 'normal'
+      return ph < t.dangerLow || ph > t.dangerHigh ? 'danger' : 'normal'
     case 'intensitas_uv':
-      return uv < 0 || uv > 2000 ? 'danger' : 'normal'
+      return uv < t.dangerLow || uv > t.dangerHigh ? 'danger' : 'normal'
     default:
       return 'normal'
   }
@@ -241,13 +250,13 @@ export function alertValueClass(status) {
   return ''
 }
 
-// Badge online/offline: data terbaru dalam 5 menit (300000 ms).
-export const ONLINE_WINDOW_MS = 300000
+// Badge online/offline: data terbaru dalam batas Settings > Monitoring.
+export const ONLINE_WINDOW_MS = DEFAULT_SETTINGS.monitoring.onlineWindowMinutes * 60 * 1000
 
-export function isOnline(latestWaktu) {
+export function isOnline(latestWaktu, windowMs = ONLINE_WINDOW_MS) {
   if (!latestWaktu) return false
   const diff = new Date() - new Date(latestWaktu)
-  return diff <= ONLINE_WINDOW_MS
+  return diff <= windowMs
 }
 
 // Label "Diperbarui" di header dashboard. Saat perangkat offline, nilai lama
@@ -265,10 +274,10 @@ export function lastUpdateLabel(latestWaktu, networkOnline = true) {
 
 // Status koneksi yang ditampilkan di badge: gabungan status jaringan browser
 // dan kesegaran data terakhir.
-export function connectionState(latestWaktu, networkOnline = true) {
+export function connectionState(latestWaktu, networkOnline = true, windowMs = ONLINE_WINDOW_MS) {
   if (!networkOnline) return 'offline'
   if (!latestWaktu) return 'connecting'
-  return isOnline(latestWaktu) ? 'online' : 'offline'
+  return isOnline(latestWaktu, windowMs) ? 'online' : 'offline'
 }
 
 // Garis batas annotation per sensor (port dari index.html baris 480-491).
@@ -309,15 +318,24 @@ function targetLine(y, label, position = 'end') {
 }
 
 // target: angka tunggal (TDS = ppmTarget) atau objek { phMin, phMax } (pH).
-export function annotationsFor(key, target) {
+// config: { thresholds, phFallbackMin, phFallbackMax } dari Settings; opsional
+// agar pemanggil lama tetap memakai default.
+export function annotationsFor(key, target, config = {}) {
+  const thresholds = config.thresholds ?? DEFAULT_THRESHOLDS
+  const phMinFallback = config.phFallbackMin ?? DEFAULT_SETTINGS.plan.phFallbackMin
+  const phMaxFallback = config.phFallbackMax ?? DEFAULT_SETTINGS.plan.phFallbackMax
+
   switch (key) {
     case 'kadar_tds': {
+      const tdsDefaults = DEFAULT_THRESHOLDS.kadar_tds
+      const warnLow = thresholds.kadar_tds?.warnLow ?? tdsDefaults.warnLow
+      const warnHigh = thresholds.kadar_tds?.warnHigh ?? tdsDefaults.warnHigh
       if (target === null || target === undefined) {
-        return { garisBawah: borderLine(700), garisAtas: borderLine(1300) }
+        return { garisBawah: borderLine(warnLow), garisAtas: borderLine(warnHigh) }
       }
       const t = Number(target)
       if (Number.isFinite(t)) return { garisTarget: targetLine(t, `Target ${t} ppm`) }
-      return { garisBawah: borderLine(700), garisAtas: borderLine(1300) }
+      return { garisBawah: borderLine(warnLow), garisAtas: borderLine(warnHigh) }
     }
     case 'kadar_ph': {
       const phMin = Number(target?.phMin)
@@ -328,12 +346,20 @@ export function annotationsFor(key, target) {
           garisAtas: targetLine(phMax, `pH ${target.phMax}`, 'end'),
         }
       }
-      return { garisBawah: borderLine(5.5), garisAtas: borderLine(6.5) }
+      return { garisBawah: borderLine(phMinFallback), garisAtas: borderLine(phMaxFallback) }
     }
     case 'suhu_air':
-      return { garisAtas: borderLine(30) }
+      return {
+        garisAtas: borderLine(
+          thresholds.suhu_air?.danger ?? DEFAULT_THRESHOLDS.suhu_air.danger
+        ),
+      }
     case 'suhu_udara':
-      return { garisAtas: borderLine(34) }
+      return {
+        garisAtas: borderLine(
+          thresholds.suhu_udara?.danger ?? DEFAULT_THRESHOLDS.suhu_udara.danger
+        ),
+      }
     default:
       return {}
   }

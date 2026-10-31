@@ -4,6 +4,7 @@ import { useSensorData } from './useSensorData.js'
 import PzemChart from './PzemChart.jsx'
 import { calculateTrend, dateTimeLabel, TREND_FILTERS, trendFilterToApi } from './utils.js'
 import { PZEM_METRICS, PZEM_TREND_OPTIONS, pzemValueOrNull } from './listrikUtils.js'
+import { useSettings } from '../../settings/SettingsProvider.jsx'
 
 // Halaman analisis tren 1 metrik listrik (paralel TrendPage hidroponik).
 export default function ListrikTrendPage() {
@@ -11,8 +12,13 @@ export default function ListrikTrendPage() {
   const navigate = useNavigate()
   const metricKey = PZEM_METRICS[metric] ? metric : 'tegangan'
   const [filter, setFilter] = useState('realtime')
+  const { settings } = useSettings()
 
-  const { data } = useSensorData({ filter: trendFilterToApi(filter), domain: 'listrik' })
+  const { data } = useSensorData({
+    filter: trendFilterToApi(filter),
+    domain: 'listrik',
+    pollMs: settings.monitoring.pollListrikSeconds * 1000,
+  })
 
   const meta = PZEM_METRICS[metricKey]
   const labels = useMemo(() => data.map((row) => dateTimeLabel(row.waktu)), [data])

@@ -14,6 +14,7 @@ import annotationPlugin from 'chartjs-plugin-annotation'
 import { Line } from 'react-chartjs-2'
 import { SENSORS, annotationsFor, makeGradient, computeYMax } from './utils.js'
 import { useTankTarget } from './useTankTarget.js'
+import { useSettings } from '../../settings/SettingsProvider.jsx'
 
 ChartJS.register(
   LineController,
@@ -35,6 +36,7 @@ ChartJS.defaults.font.size = 12
 // 6 chart line dengan gradient/annotation ala index.html createChart (baris 459-498).
 export default function SensorChart({ sensorKey, labels, values, height = 230 }) {
   const meta = SENSORS[sensorKey]
+  const { settings } = useSettings()
 
   // TDS memakai ppmTarget (floor + garis); pH memakai phMin/phMax (garis).
   const tankRecipe = useTankTarget({
@@ -70,10 +72,15 @@ export default function SensorChart({ sensorKey, labels, values, height = 230 })
   )
 
   const annotations = useMemo(() => {
-    if (sensorKey === 'kadar_tds') return annotationsFor(sensorKey, tankRecipe?.ppmTarget)
-    if (sensorKey === 'kadar_ph') return annotationsFor(sensorKey, tankRecipe)
-    return annotationsFor(sensorKey)
-  }, [sensorKey, tankRecipe])
+    const config = {
+      thresholds: settings.monitoring.thresholds,
+      phFallbackMin: settings.plan.phFallbackMin,
+      phFallbackMax: settings.plan.phFallbackMax,
+    }
+    if (sensorKey === 'kadar_tds') return annotationsFor(sensorKey, tankRecipe?.ppmTarget, config)
+    if (sensorKey === 'kadar_ph') return annotationsFor(sensorKey, tankRecipe, config)
+    return annotationsFor(sensorKey, undefined, config)
+  }, [sensorKey, tankRecipe, settings])
 
   const options = useMemo(
     () => ({
