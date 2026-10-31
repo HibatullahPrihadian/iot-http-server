@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { get } from './api.js'
 import { APP_VERSION } from './version.js'
@@ -230,26 +230,6 @@ function AppShell({ pwa }) {
   const location = useLocation()
   const navigate = useNavigate()
   const { settings } = useSettings()
-  const headerRef = useRef(null)
-
-  // Ukur tinggi header (berubah saat nav membungkus di mobile) dan simpan ke
-  // CSS var agar sub-nav Settings bisa sticky tepat di bawahnya.
-  useEffect(() => {
-    const el = headerRef.current
-    if (!el || typeof ResizeObserver === 'undefined') return undefined
-
-    function apply() {
-      const h = el.getBoundingClientRect().height
-      if (h > 0) {
-        document.documentElement.style.setProperty('--app-header-h', `${Math.round(h)}px`)
-      }
-    }
-
-    apply()
-    const observer = new ResizeObserver(apply)
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [])
 
   const SECTIONS = [
     { key: 'monitoring', label: 'Monitoring', to: '/monitoring' },
@@ -261,10 +241,7 @@ function AppShell({ pwa }) {
   return (
     <>
       <OfflineBanner online={pwa.online} />
-      <header
-        ref={headerRef}
-        className="sticky top-0 z-30 bg-surface-bg/90 backdrop-blur border-b border-white/10"
-      >
+      <header className="sticky top-0 z-30 bg-surface-bg/90 backdrop-blur border-b border-white/10">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-baseline gap-2">
             <h1 className="text-lg font-bold text-text-hi">{settings.general.farmName}</h1>

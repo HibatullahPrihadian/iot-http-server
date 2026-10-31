@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { RefreshCw } from 'lucide-react'
 import { useSettings } from '../settings/SettingsProvider.jsx'
 import usePinGate from '../settings/usePinGate.js'
 import PinPromptModal from '../settings/PinPromptModal.jsx'
 import { DEFAULT_SECTION, SETTINGS_SECTIONS, findSection } from '../settings/sections.js'
 import { useToast } from '../features/iot/Toast.jsx'
-import SettingsTabs from './settings/SettingsTabs.jsx'
+import { BottomTabs, Tabs } from './Tabs.jsx'
 import GeneralSection from './settings/GeneralSection.jsx'
 import PlanSection from './settings/PlanSection.jsx'
 import MonitoringSection from './settings/MonitoringSection.jsx'
@@ -191,26 +192,48 @@ export default function SettingsPage() {
         onSubmit: handleChangePin,
       }
 
+  // Metadata tab untuk Tabs/BottomTabs (bentuk sama dengan tab Plan).
+  const tabs = SETTINGS_SECTIONS.map(({ key, label, Icon }) => ({ key, label, Icon }))
+  const renderBadge = (key) =>
+    dirtyKeys.includes(key) ? (
+      <span
+        className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-ios-orange"
+        aria-label="Ada perubahan belum disimpan"
+      />
+    ) : null
+
   return (
-    <div className="pb-20 md:pb-0">
-      <div className="space-y-5 mb-5">
-        <div className="glass-panel p-5 flex items-start justify-between gap-4 flex-wrap">
+    <>
+      <div className="glass-panel p-4 mb-6 flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-start gap-3">
           <div>
             <h1 className="text-xl font-bold text-text-hi">Pengaturan</h1>
-            <p className="text-sm text-text-low mt-0.5">
-              Nilai operasional yang dipakai bersama oleh Monitoring, Listrik, dan Plan.
+            <p className="hidden md:block text-sm text-text-low mt-0.5">
+              Nilai operasional yang dipakai bersama Monitoring, Listrik, dan Plan.
             </p>
           </div>
           <button
             type="button"
             onClick={refresh}
             disabled={loading}
-            className="btn-ios bg-white/10 text-text-body text-sm font-semibold px-4 py-2.5 disabled:opacity-60"
+            aria-label="Muat ulang pengaturan"
+            title="Muat ulang pengaturan"
+            className="btn-ios mt-0.5 inline-flex items-center justify-center rounded-xl bg-white/10
+              text-text-body p-2 disabled:opacity-60"
           >
-            {loading ? 'Memuat...' : 'Muat ulang'}
+            <RefreshCw size={16} className={loading ? 'animate-spin' : undefined} aria-hidden="true" />
           </button>
         </div>
+        <Tabs
+          active={activeKey}
+          onChange={changeTab}
+          tabs={tabs}
+          idPrefix="settings-tab"
+          renderBadge={renderBadge}
+        />
+      </div>
 
+      <div className="space-y-6 pb-20 md:pb-0">
         {pinIsDefault && (
           <div className="rounded-lg bg-ios-orange/10 border border-ios-orange/40 text-ios-orange text-sm px-4 py-3">
             PIN Settings masih default (<strong>1234</strong>). Ganti lewat tab{' '}
@@ -230,15 +253,22 @@ export default function SettingsPage() {
             Gagal memuat pengaturan: {error} (memakai nilai cache/default)
           </div>
         )}
-      </div>
 
-      <SettingsTabs active={activeKey} dirtyKeys={dirtyKeys} onChange={changeTab} />
-
-      <div className="pt-5" role="tabpanel" aria-labelledby={`settings-tab-${activeKey}`}>
-        <ActiveSection key={activeKey} {...sectionProps} />
+        <div role="tabpanel" aria-labelledby={`settings-tab-${activeKey}`}>
+          <ActiveSection key={activeKey} {...sectionProps} />
+        </div>
       </div>
 
       <PinPromptModal gate={gate} />
-    </div>
+
+      <BottomTabs
+        active={activeKey}
+        onChange={changeTab}
+        tabs={tabs}
+        idPrefix="settings-bottom-tab"
+        renderBadge={renderBadge}
+        scrollable
+      />
+    </>
   )
 }

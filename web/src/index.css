@@ -7,12 +7,6 @@ html {
   min-height: 100%;
 }
 
-/* Tinggi header aplikasi (diukur App.jsx lewat ResizeObserver). Dipakai sub-nav
-   Settings agar sticky tepat di bawah header; nilai ini hanya fallback. */
-:root {
-  --app-header-h: 56px;
-}
-
 body {
   margin: 0;
   min-height: 100vh;
