@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import { Maximize2 } from 'lucide-react'
 import { get, put, del, uploadImage } from '../api.js'
 import { useSettings } from '../settings/SettingsProvider.jsx'
+import ImageLightbox from './ImageLightbox.jsx'
 
 const ALLOWED = ['image/jpeg', 'image/png', 'image/webp']
 
@@ -15,11 +17,14 @@ export default function NotesImages({ batch, onChanged }) {
   const [savingNotes, setSavingNotes] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
+  // Index gambar yang dibuka di lightbox; null = tertutup.
+  const [previewIndex, setPreviewIndex] = useState(null)
   const fileRef = useRef(null)
 
-  // Reset field catatan saat berganti batch (bukan tiap notes berubah).
+  // Reset field catatan & preview saat berganti batch (bukan tiap notes berubah).
   useEffect(() => {
     setNotes(batch.notes || '')
+    setPreviewIndex(null)
   }, [batch.id])
 
   // Muat gambar sekali per batch; tidak ikut refetch saat catatan disimpan.
@@ -147,18 +152,34 @@ export default function NotesImages({ batch, onChanged }) {
 
         {images.length > 0 && (
           <div className="grid grid-cols-3 gap-2">
-            {images.map((img) => (
+            {images.map((img, i) => (
               <div key={img.id} className="relative group">
-                <img
-                  src={img.url}
-                  alt="Gambar batch"
-                  className="w-full h-20 object-cover rounded-lg border border-white/10"
-                />
+                <button
+                  type="button"
+                  onClick={() => setPreviewIndex(i)}
+                  aria-label={`Lihat gambar ${i + 1}`}
+                  className="block w-full rounded-lg overflow-hidden border border-white/10
+                    cursor-zoom-in focus:outline-none focus:ring-2 focus:ring-ios-blue/50"
+                >
+                  <img
+                    src={img.url}
+                    alt={`Dokumentasi tanaman ${i + 1}`}
+                    className="w-full h-20 object-cover"
+                  />
+                  <span
+                    className="absolute inset-0 flex items-center justify-center bg-black/30
+                      opacity-0 group-hover:opacity-100 transition pointer-events-none"
+                    aria-hidden="true"
+                  >
+                    <Maximize2 size={18} className="text-white" />
+                  </span>
+                </button>
                 <button
                   type="button"
                   onClick={() => removeImage(img.id)}
                   className="absolute top-1 right-1 bg-ios-red/90 text-white rounded-full
-                    w-5 h-5 text-xs leading-none opacity-0 group-hover:opacity-100 transition"
+                    w-5 h-5 text-xs leading-none opacity-0 group-hover:opacity-100 transition
+                    focus:opacity-100"
                   aria-label="Hapus gambar"
                 >
                   &times;
@@ -168,6 +189,14 @@ export default function NotesImages({ batch, onChanged }) {
           </div>
         )}
       </div>
+
+      {previewIndex !== null && (
+        <ImageLightbox
+          images={images}
+          initialIndex={previewIndex}
+          onClose={() => setPreviewIndex(null)}
+        />
+      )}
     </div>
   )
 }
