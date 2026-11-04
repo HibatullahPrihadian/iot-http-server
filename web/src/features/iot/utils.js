@@ -261,22 +261,27 @@ export function isOnline(latestWaktu, windowMs = ONLINE_WINDOW_MS) {
 
 // Label "Diperbarui" di header dashboard. Saat perangkat offline, nilai lama
 // tidak boleh tampil seolah-olah data terkini: tandai sebagai data terakhir.
-export function lastUpdateLabel(latestWaktu, networkOnline = true) {
+// `settled` = sudah ada respons server; tanpa data setelah itu berarti
+// perangkat memang tidak mengirim data (bukan masih memuat).
+export function lastUpdateLabel(latestWaktu, networkOnline = true, settled = true) {
   if (!networkOnline) {
     return latestWaktu
       ? `Offline — data terakhir: ${new Date(latestWaktu).toLocaleString('id-ID')}`
       : 'Offline — data sensor tidak tersedia'
   }
-  return latestWaktu
-    ? `Diperbarui: ${new Date(latestWaktu).toLocaleString('id-ID')}`
-    : 'Memperbarui data...'
+  if (latestWaktu) {
+    return `Diperbarui: ${new Date(latestWaktu).toLocaleString('id-ID')}`
+  }
+  return settled ? 'Belum ada data dari perangkat.' : 'Memperbarui data...'
 }
 
 // Status koneksi yang ditampilkan di badge: gabungan status jaringan browser
-// dan kesegaran data terakhir.
-export function connectionState(latestWaktu, networkOnline = true, windowMs = ONLINE_WINDOW_MS) {
+// dan kesegaran data terakhir. 'connecting' hanya sebelum respons pertama
+// server selesai; setelah itu data kosong berarti perangkat offline, bukan
+// masih menghubungkan.
+export function connectionState(latestWaktu, networkOnline = true, windowMs = ONLINE_WINDOW_MS, settled = true) {
   if (!networkOnline) return 'offline'
-  if (!latestWaktu) return 'connecting'
+  if (!latestWaktu) return settled ? 'offline' : 'connecting'
   return isOnline(latestWaktu, windowMs) ? 'online' : 'offline'
 }
 

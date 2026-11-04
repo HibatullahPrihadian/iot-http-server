@@ -11,6 +11,11 @@ export function useSensorData({ filter = 'realtime', enabled = true, domain = 'h
   const [energy, setEnergy] = useState({ period: null, from: null, to: null })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // `settled` = sudah pernah ada percobaan fetch yang selesai (sukses/gagal).
+  // Dipakai UI untuk membedakan "belum sempat menghubungi server" dari
+  // "server menjawab tapi tidak ada data" -> badge tidak tertahan di
+  // "Menghubungkan..." saat InfluxDB kosong / perangkat offline.
+  const [settled, setSettled] = useState(false)
   const timer = useRef(null)
   // Filter yang request-nya masih berjalan. Poll berikutnya dilewati agar
   // request tidak menumpuk saat server/jaringan lambat (penyebab halaman
@@ -41,6 +46,7 @@ export function useSensorData({ filter = 'realtime', enabled = true, domain = 'h
     } finally {
       inFlight.current = null
       setLoading(false)
+      setSettled(true)
     }
   }, [domain])
 
@@ -59,7 +65,7 @@ export function useSensorData({ filter = 'realtime', enabled = true, domain = 'h
     }
   }, [filter, enabled, fetchData, pollMs])
 
-  return { data, loading, error, energy }
+  return { data, loading, error, energy, settled }
 }
 
 // Polling status relay 4 kanal tiap 5 detik.

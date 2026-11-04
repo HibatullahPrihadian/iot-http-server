@@ -87,7 +87,7 @@ export default function ListrikPage() {
   // Data PZEM dikirim ~1 Hz, tapi query InfluxDB-nya berat: poll 1 detik
   // membuat request saling menyusul. 2 detik + anti-pileup di useSensorData
   // membuat dashboard tetap terasa realtime tanpa membebani server.
-  const { data, loading, error, energy } = useSensorData({
+  const { data, loading, error, energy, settled } = useSensorData({
     filter,
     domain: 'listrik',
     pollMs: settings.monitoring.pollListrikSeconds * 1000,
@@ -98,7 +98,8 @@ export default function ListrikPage() {
   const status = connectionState(
     latest?.waktu,
     networkOnline,
-    settings.monitoring.onlineWindowMinutes * 60000
+    settings.monitoring.onlineWindowMinutes * 60000,
+    settled
   )
   const online = status === 'online'
   const labels = data.map((row) => timeLabel(row.waktu))
@@ -157,7 +158,7 @@ export default function ListrikPage() {
           </div>
         </div>
         <div className="text-[13px] text-text-low mt-4">
-          {lastUpdateLabel(latest?.waktu, networkOnline)}
+          {lastUpdateLabel(latest?.waktu, networkOnline, settled)}
         </div>
         <div className="mt-4">
           <span
@@ -165,7 +166,9 @@ export default function ListrikPage() {
               ${
                 online
                   ? 'bg-[rgba(48,209,88,0.2)] text-ios-green border border-ios-green [box-shadow:0_0_10px_rgba(48,209,88,0.3)]'
-                  : 'bg-[rgba(255,69,58,0.2)] text-ios-red border border-ios-red [box-shadow:0_0_10px_rgba(255,69,58,0.3)]'
+                  : status === 'connecting'
+                    ? 'bg-[rgba(255,159,10,0.2)] text-ios-orange border border-ios-orange [box-shadow:0_0_10px_rgba(255,159,10,0.3)]'
+                    : 'bg-[rgba(255,69,58,0.2)] text-ios-red border border-ios-red [box-shadow:0_0_10px_rgba(255,69,58,0.3)]'
               }`}
           >
             {status === 'connecting' ? 'Menghubungkan...' : online ? 'Online' : 'Offline'}

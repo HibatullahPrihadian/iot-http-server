@@ -41,7 +41,7 @@ export default function MonitoringPage() {
   const [filter, setFilter] = useState('realtime')
   // Saat offline, polling dihentikan: request pasti gagal dan hanya membuat
   // status "Online" dari data lama menyesatkan.
-  const { data, loading, error } = useSensorData({
+  const { data, loading, error, settled } = useSensorData({
     filter,
     enabled: networkOnline,
     pollMs: settings.monitoring.pollHidroSeconds * 1000,
@@ -51,7 +51,8 @@ export default function MonitoringPage() {
   const status = connectionState(
     latest?.waktu,
     networkOnline,
-    settings.monitoring.onlineWindowMinutes * 60000
+    settings.monitoring.onlineWindowMinutes * 60000,
+    settled
   )
   const online = status === 'online'
   const labels = data.map((row) => timeLabel(row.waktu))
@@ -83,15 +84,17 @@ export default function MonitoringPage() {
           </div>
         </div>
         <div className="text-[13px] text-text-low mt-4">
-          {lastUpdateLabel(latest?.waktu, networkOnline)}
+          {lastUpdateLabel(latest?.waktu, networkOnline, settled)}
         </div>
         <div className="mt-4">
           <span
             className={`inline-block px-3.5 py-1.5 rounded-full font-semibold text-[13px] transition-all
               ${
-                online
+                status === 'online'
                   ? 'bg-[rgba(48,209,88,0.2)] text-ios-green border border-ios-green [box-shadow:0_0_10px_rgba(48,209,88,0.3)]'
-                  : 'bg-[rgba(255,69,58,0.2)] text-ios-red border border-ios-red [box-shadow:0_0_10px_rgba(255,69,58,0.3)]'
+                  : status === 'connecting'
+                    ? 'bg-[rgba(255,159,10,0.2)] text-ios-orange border border-ios-orange [box-shadow:0_0_10px_rgba(255,159,10,0.3)]'
+                    : 'bg-[rgba(255,69,58,0.2)] text-ios-red border border-ios-red [box-shadow:0_0_10px_rgba(255,69,58,0.3)]'
               }`}
           >
             {status === 'connecting' ? 'Menghubungkan...' : online ? 'Online' : 'Offline'}
