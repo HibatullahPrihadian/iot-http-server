@@ -40,7 +40,7 @@ const SENSOR_CACHE_TTL_HISTORY_MS = Number(process.env.SENSOR_CACHE_TTL_HISTORY_
 const ENERGY_CACHE_TTL_MS = Number(process.env.ENERGY_CACHE_TTL_MS) || 60000;
 const sensorCache = new Map();     // key -> { at, payload }
 const sensorInflight = new Map();  // key -> Promise<payload>
-const energyCache = new Map();     // rangeQuery -> { at, value }
+const energyCache = new Map();     // `${rangeQuery}|${energyWindow}` -> { at, value }
 
 // --- TOKEN PERANGKAT (X-Device-Token) ---
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN || '';
@@ -124,62 +124,69 @@ function internalAuth(req, res, next) {
     next();
 }
 
-// Helper: hitung pemakaian energi PZEM (kWh) pada rentang filter, dari data MENTAH
-// (tanpa downsampling/limit chart). Memakai difference(nonNegative:true) |> sum()
-// sehingga kenaikan terjumlah dan reset (nilai turun) diabaikan -> reset-safe.
+// Helper: hitung pemakaian energi PZEM (kWh) pada rentang filter.
+// `energi` bersifat kumulatif, jadi downsample dulu dengan last() per jendela
+// (aggregateWindow) agar query tetap ringan untuk rentang panjang, lalu
+// jumlahkan selisih non-negatif (reset-safe) di Node. Satu scan, tanpa
+// union/sort besar yang membuat query > 24 jam melewati timeout client (10 dtk).
 // Mengembalikan { period, from, to } atau { period: null } bila data < 2 titik.
 //
 // Hasil di-cache: angka kWh kumulatif berubah lambat, sedangkan query ini
-// memindai seluruh titik `energi` (~1 Hz) pada rentang yang diminta. Tanpa cache,
+// memindai titik `energi` (~1 Hz) pada rentang yang diminta. Tanpa cache,
 // dashboard Listrik yang polling tiap detik menembak InfluxDB terus-menerus.
-async function hitungEnergiPeriode(rangeQuery) {
-    const cached = energyCache.get(rangeQuery);
+async function hitungEnergiPeriode(rangeQuery, energyWindow) {
+    const cacheKey = `${rangeQuery}|${energyWindow}`;
+    const cached = energyCache.get(cacheKey);
     if (cached && Date.now() - cached.at < ENERGY_CACHE_TTL_MS) {
         return cached.value;
     }
 
     const queryApi = client.getQueryApi(org);
-    const base = `
+    const energyQuery = `
         from(bucket: "${bucket}")
           |> range(start: ${rangeQuery})
           |> filter(fn: (r) => r["_measurement"] == "hidroponik_sensor")
           |> filter(fn: (r) => r["_field"] == "energi")
           |> filter(fn: (r) => exists r._value)
           |> keep(columns: ["_time", "_value"])
+          |> aggregateWindow(every: ${energyWindow}, fn: last, createEmpty: false)
           |> sort(columns: ["_time"])`;
 
-    // Total kenaikan (reset-safe) + titik pertama/terakhir dalam satu query.
-    const energyQuery = `
-        union(tables: [
-          ${base} |> difference(nonNegative: true) |> sum() |> map(fn: (r) => ({ _time: r._time, _kind: "total", _value: r._value })),
-          ${base} |> first() |> map(fn: (r) => ({ _time: r._time, _kind: "first", _value: r._value })),
-          ${base} |> last()  |> map(fn: (r) => ({ _time: r._time, _kind: "last",  _value: r._value }))
-        ])`;
-
     return await new Promise((resolve) => {
-        let total = null;
+        let total = 0;
+        let prev = null;
         let first = null;
         let last = null;
-        let count = 0;
+        let n = 0;
         queryApi.queryRows(energyQuery, {
             next(row, tableMeta) {
                 const obj = tableMeta.toObject(row);
-                count++;
-                if (obj._kind === 'total') total = obj._value;
-                else if (obj._kind === 'first') first = obj._time;
-                else if (obj._kind === 'last') last = obj._time;
+                const v = Number(obj._value);
+                if (!Number.isFinite(v)) return;
+                if (first === null) first = obj._time;
+                if (prev !== null && v >= prev) total += v - prev;
+                prev = v;
+                last = obj._time;
+                n++;
             },
-            error() {
-                // Jangan gagalkan seluruh respons; energi cukup null.
+            error(error) {
+                // Jangan gagalkan seluruh respons; energi cukup null. Log agar
+                // kegagalan query (mis. timeout) tidak lagi tak terlihat.
+                console.error(
+                    `[ENERGI] query gagal (${rangeQuery}, ${energyWindow}):`,
+                    (error && error.message) || error
+                );
                 const value = { period: null, from: null, to: null };
-                energyCache.set(rangeQuery, { at: Date.now(), value });
+                energyCache.set(cacheKey, { at: Date.now(), value });
                 resolve(value);
             },
             complete() {
-                const value = total === null || count < 3
-                    ? { period: null, from: first, to: last }
-                    : { period: total, from: first, to: last };
-                energyCache.set(rangeQuery, { at: Date.now(), value });
+                const value = {
+                    period: n >= 2 ? total : null,
+                    from: first,
+                    to: last,
+                };
+                energyCache.set(cacheKey, { at: Date.now(), value });
                 resolve(value);
             },
         });
@@ -228,6 +235,10 @@ async function bangunDataSensor(filter, includeListrik) {
     // tetap menghitung 6 jam terakhir seperti sebelumnya.
     let rangeQuery = includeListrik ? '-3m' : '-2h';
     let energyRange = '-6h';
+    // Jendela downsampling khusus query energi periode. `energi` kumulatif ->
+    // last() per jendela, lalu selisihnya dijumlahkan di Node. Target <= ~2000
+    // bucket agar query tidak melewati timeout client (10 dtk).
+    let energyWindow = '1m';
     let windowEvery = '';
     // Batasi titik TERAKHIR per _field. Harus SEBELUM pivot: sesudah pivot
     // _field sudah lebur jadi kolom, jadi tail tak bisa grup per field.
@@ -241,45 +252,55 @@ async function bangunDataSensor(filter, includeListrik) {
         rangeQuery = '-1h';
         energyRange = '-1h';
         windowEvery = '1m';
+        energyWindow = '1m';
         tailLimit = 240;
     } else if (filter === '3hour') {
         rangeQuery = '-3h';
         energyRange = '-3h';
         windowEvery = '3m';
+        energyWindow = '1m';
         tailLimit = 240;
     } else if (filter === '6hour') {
         rangeQuery = '-6h';
         energyRange = '-6h';
         windowEvery = '6m';
+        energyWindow = '2m';
         tailLimit = 240;
     } else if (filter === '12hour') {
         rangeQuery = '-12h';
         energyRange = '-12h';
         windowEvery = '5m';
+        energyWindow = '5m';
     } else if (filter === '1day') {
         rangeQuery = '-24h';
         energyRange = '-24h';
         windowEvery = '15m';
+        energyWindow = '15m';
     } else if (filter === '1week') {
         rangeQuery = '-7d';
         energyRange = '-7d';
         windowEvery = '1h';
+        energyWindow = '5m';
     } else if (filter === '2week') {
         rangeQuery = '-14d';
         energyRange = '-14d';
         windowEvery = '2h';
+        energyWindow = '10m';
     } else if (filter === '1month') {
         rangeQuery = '-30d';
         energyRange = '-30d';
         windowEvery = '6h';
+        energyWindow = '30m';
     } else if (filter === '3month') {
         rangeQuery = '-90d';
         energyRange = '-90d';
         windowEvery = '12h';
+        energyWindow = '2h';
     } else if (filter === '6month') {
         rangeQuery = '-180d';
         energyRange = '-180d';
         windowEvery = '24h';
+        energyWindow = '4h';
     }
 
     const meanAgg = windowEvery ? `|> aggregateWindow(every: ${windowEvery}, fn: mean, createEmpty: false)` : '';
@@ -346,7 +367,9 @@ async function bangunDataSensor(filter, includeListrik) {
     try {
         // Query energi periode dijalankan PARALEL dengan query chart (bukan
         // berurutan) agar request pertama tidak menunggu dua kali.
-        const energyPromise = includeListrik ? hitungEnergiPeriode(energyRange) : null;
+        const energyPromise = includeListrik
+            ? hitungEnergiPeriode(energyRange, energyWindow)
+            : null;
 
         await new Promise((resolve, reject) => {
             // FUNGSI BANTUAN UNTUK MEMBULATKAN DESIMAL
