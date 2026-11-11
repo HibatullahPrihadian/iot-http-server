@@ -193,6 +193,29 @@ async function hitungEnergiPeriode(rangeQuery, energyWindow) {
     });
 }
 
+// Hitung periode energi (kWh) dari seri `energi` chart: jumlah selisih
+// non-negatif antar titik (reset-safe). Dipakai filter riwayat agar tidak
+// perlu scan ulang data mentah yang lambat (bisa >10 dtk / timeout client).
+function hitungEnergiDariSeri(rows) {
+    let period = null;
+    let from = null;
+    let to = null;
+    let prev = null;
+    let total = 0;
+    let n = 0;
+    for (const row of rows) {
+        const v = row.energi;
+        if (v === null || v === undefined || !Number.isFinite(Number(v))) continue;
+        if (from === null) from = row.waktu;
+        if (prev !== null && v >= prev) total += v - prev;
+        prev = v;
+        to = row.waktu;
+        n++;
+    }
+    if (n >= 2) period = total;
+    return { period, from, to };
+}
+
 // --- ROUTES (API ENDPOINT) ---
 // 1. Route Default (Cek Status Server)
 app.get('/', (req, res) => {
@@ -235,10 +258,9 @@ async function bangunDataSensor(filter, includeListrik) {
     // tetap menghitung 6 jam terakhir seperti sebelumnya.
     let rangeQuery = includeListrik ? '-3m' : '-2h';
     let energyRange = '-6h';
-    // Jendela downsampling khusus query energi periode. `energi` kumulatif ->
-    // last() per jendela, lalu selisihnya dijumlahkan di Node. Target <= ~2000
-    // bucket agar query tidak melewati timeout client (10 dtk).
-    let energyWindow = '1m';
+    // Jendela downsampling query energi (hanya dipakai filter realtime; untuk
+    // filter riwayat, periode energi dihitung dari seri `energi` chart).
+    const energyWindow = '1m';
     let windowEvery = '';
     // Batasi titik TERAKHIR per _field. Harus SEBELUM pivot: sesudah pivot
     // _field sudah lebur jadi kolom, jadi tail tak bisa grup per field.
@@ -252,56 +274,50 @@ async function bangunDataSensor(filter, includeListrik) {
         rangeQuery = '-1h';
         energyRange = '-1h';
         windowEvery = '1m';
-        energyWindow = '1m';
         tailLimit = 240;
     } else if (filter === '3hour') {
         rangeQuery = '-3h';
         energyRange = '-3h';
         windowEvery = '3m';
-        energyWindow = '1m';
         tailLimit = 240;
     } else if (filter === '6hour') {
         rangeQuery = '-6h';
         energyRange = '-6h';
         windowEvery = '6m';
-        energyWindow = '2m';
         tailLimit = 240;
     } else if (filter === '12hour') {
         rangeQuery = '-12h';
         energyRange = '-12h';
         windowEvery = '5m';
-        energyWindow = '5m';
     } else if (filter === '1day') {
         rangeQuery = '-24h';
         energyRange = '-24h';
         windowEvery = '15m';
-        energyWindow = '15m';
     } else if (filter === '1week') {
         rangeQuery = '-7d';
         energyRange = '-7d';
         windowEvery = '1h';
-        energyWindow = '5m';
     } else if (filter === '2week') {
         rangeQuery = '-14d';
         energyRange = '-14d';
         windowEvery = '2h';
-        energyWindow = '10m';
     } else if (filter === '1month') {
         rangeQuery = '-30d';
         energyRange = '-30d';
         windowEvery = '6h';
-        energyWindow = '30m';
     } else if (filter === '3month') {
         rangeQuery = '-90d';
         energyRange = '-90d';
         windowEvery = '12h';
-        energyWindow = '2h';
     } else if (filter === '6month') {
         rangeQuery = '-180d';
         energyRange = '-180d';
         windowEvery = '24h';
-        energyWindow = '4h';
     }
+
+    // Riwayat listrik: ambil SEMUA bucket hasil agregasi (maks 180 bucket:
+    // 6month/24h), bukan hanya 120 terakhir, agar periode energi tidak terpotong.
+    if (includeListrik && filter !== 'realtime') tailLimit = 240;
 
     const meanAgg = windowEvery ? `|> aggregateWindow(every: ${windowEvery}, fn: mean, createEmpty: false)` : '';
     const lastAgg = windowEvery ? `|> aggregateWindow(every: ${windowEvery}, fn: last, createEmpty: false)` : '';
@@ -365,9 +381,11 @@ async function bangunDataSensor(filter, includeListrik) {
     
     let dataSensor = [];
     try {
-        // Query energi periode dijalankan PARALEL dengan query chart (bukan
-        // berurutan) agar request pertama tidak menunggu dua kali.
-        const energyPromise = includeListrik
+        // Filter realtime: rentang chart hanya -3m, jadi periode 6 jam dihitung
+        // dengan query terpisah (scan 6 jam murah). Untuk filter riwayat, scan
+        // ulang `energi` 7-180 hari terlalu lambat (bisa >10 dtk dan timeout),
+        // jadi periode dihitung dari seri `energi` yang sudah diambil chart.
+        const energyPromise = includeListrik && filter === 'realtime'
             ? hitungEnergiPeriode(energyRange, energyWindow)
             : null;
 
@@ -422,17 +440,24 @@ async function bangunDataSensor(filter, includeListrik) {
                 complete() { resolve(); },
             });
         });
-        // Energi periode (kWh) dihitung dari data mentah, hanya untuk domain listrik.
-        // Dipakai dashboard Listrik agar estimasi biaya tidak memakai data chart
-        // yang sudah di-downsample/dipotong.
+        // Energi periode (kWh), hanya untuk domain listrik.
+        // Realtime memakai query terpisah; filter riwayat dihitung dari seri
+        // `energi` chart (reset-safe, sudah ter-downsample) agar tidak timeout.
         let energyPeriod = null;
         let energyFrom = null;
         let energyTo = null;
         if (includeListrik) {
-            const e = await energyPromise;
-            energyPeriod = e.period;
-            energyFrom = e.from;
-            energyTo = e.to;
+            if (filter === 'realtime') {
+                const e = await energyPromise;
+                energyPeriod = e.period;
+                energyFrom = e.from;
+                energyTo = e.to;
+            } else {
+                const e = hitungEnergiDariSeri(dataSensor);
+                energyPeriod = e.period;
+                energyFrom = e.from;
+                energyTo = e.to;
+            }
         }
 
         const payload = { success: true, count: dataSensor.length, data: dataSensor };
