@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronLeft, ChevronRight, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Trash2, X } from 'lucide-react'
 
 const SWIPE_THRESHOLD = 40
 
@@ -13,7 +13,7 @@ function formatCaption(value) {
 
 // Lightbox gambar dokumentasi. Dirender lewat portal ke document.body karena
 // panel induk memakai backdrop-filter (mengurung position: fixed).
-export default function ImageLightbox({ images, initialIndex = 0, onClose }) {
+export default function ImageLightbox({ images, initialIndex = 0, onClose, onDelete }) {
   const total = images.length
   const [index, setIndex] = useState(() =>
     Math.min(Math.max(initialIndex, 0), Math.max(total - 1, 0))
@@ -118,17 +118,35 @@ export default function ImageLightbox({ images, initialIndex = 0, onClose }) {
           </p>
           {caption && <p className="text-text-low mt-0.5">{caption}</p>}
         </div>
-        <button
-          ref={closeRef}
-          type="button"
-          onClick={close}
-          aria-label="Tutup preview"
-          className="btn-ios inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full
-            bg-white/10 text-text-body hover:bg-white/20 focus:outline-none
-            focus:ring-2 focus:ring-ios-blue/60"
-        >
-          <X size={20} aria-hidden="true" />
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {onDelete && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onDelete(current)
+              }}
+              aria-label="Hapus gambar"
+              title="Hapus gambar"
+              className="btn-ios inline-flex h-9 w-9 items-center justify-center rounded-full
+                bg-ios-red/90 text-white hover:bg-ios-red focus:outline-none
+                focus:ring-2 focus:ring-ios-red/60"
+            >
+              <Trash2 size={18} aria-hidden="true" />
+            </button>
+          )}
+          <button
+            ref={closeRef}
+            type="button"
+            onClick={close}
+            aria-label="Tutup preview"
+            className="btn-ios inline-flex h-9 w-9 items-center justify-center rounded-full
+              bg-white/10 text-text-body hover:bg-white/20 focus:outline-none
+              focus:ring-2 focus:ring-ios-blue/60"
+          >
+            <X size={20} aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
       <div
