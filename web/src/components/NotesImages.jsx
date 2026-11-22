@@ -3,8 +3,10 @@ import { Maximize2 } from 'lucide-react'
 import { get, put, del, uploadImage } from '../api.js'
 import { useSettings } from '../settings/SettingsProvider.jsx'
 import ImageLightbox from './ImageLightbox.jsx'
+import { compressImage } from '../utils/compressImage.js'
 
 const ALLOWED = ['image/jpeg', 'image/png', 'image/webp']
+const COMPRESS_THRESHOLD_BYTES = 3 * 1024 * 1024
 
 // Catatan teks + galeri gambar untuk satu batch.
 export default function NotesImages({ batch, onChanged }) {
@@ -16,6 +18,7 @@ export default function NotesImages({ batch, onChanged }) {
   const [images, setImages] = useState([])
   const [savingNotes, setSavingNotes] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [compressing, setCompressing] = useState(false)
   const [error, setError] = useState('')
   // Index gambar yang dibuka di lightbox; null = tertutup.
   const [previewIndex, setPreviewIndex] = useState(null)
@@ -65,7 +68,8 @@ export default function NotesImages({ batch, onChanged }) {
       setError('Hanya JPG, PNG, atau WEBP yang diizinkan')
       return
     }
-    if (file.size > maxBytes) {
+    const compressionTarget = Math.min(COMPRESS_THRESHOLD_BYTES, maxBytes)
+    if (file.size > maxBytes && file.size <= compressionTarget) {
       setError(`Ukuran gambar maksimal ${settings.limits.maxImageMb}MB`)
       return
     }
@@ -77,12 +81,22 @@ export default function NotesImages({ batch, onChanged }) {
     setError('')
     setUploading(true)
     try {
-      const created = await uploadImage(batch.id, file)
+      let uploadFile = file
+      if (file.size > compressionTarget) {
+        setCompressing(true)
+        uploadFile = await compressImage(file, compressionTarget)
+        setCompressing(false)
+      }
+      if (uploadFile.size > maxBytes) {
+        throw new Error(`Ukuran gambar maksimal ${settings.limits.maxImageMb}MB`)
+      }
+      const created = await uploadImage(batch.id, uploadFile)
       setImages((prev) => [...prev, created])
     } catch (err) {
       setError(err.message)
     } finally {
       setUploading(false)
+      setCompressing(false)
     }
   }
 
@@ -139,7 +153,7 @@ export default function NotesImages({ batch, onChanged }) {
             className="btn-ios bg-ios-green hover:shadow-glow-green disabled:opacity-60
               text-white text-xs px-3 py-1.5"
           >
-            {uploading ? 'Mengunggah...' : 'Upload'}
+            {compressing ? 'Mengompres...' : uploading ? 'Mengunggah...' : 'Upload'}
           </button>
           <input
             ref={fileRef}
