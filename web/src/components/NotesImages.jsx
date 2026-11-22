@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { Maximize2 } from 'lucide-react'
+import { Maximize2, Trash2 } from 'lucide-react'
 import { get, put, del, uploadImage } from '../api.js'
 import { useSettings } from '../settings/SettingsProvider.jsx'
+import ConfirmDialog from './ConfirmDialog.jsx'
 import ImageLightbox from './ImageLightbox.jsx'
 import { compressImage } from '../utils/compressImage.js'
 
@@ -22,6 +23,9 @@ export default function NotesImages({ batch, onChanged }) {
   const [error, setError] = useState('')
   // Index gambar yang dibuka di lightbox; null = tertutup.
   const [previewIndex, setPreviewIndex] = useState(null)
+  // Gambar yang menunggu konfirmasi hapus; null = dialog tertutup.
+  const [pendingDelete, setPendingDelete] = useState(null)
+  const [deleting, setDeleting] = useState(false)
   const fileRef = useRef(null)
 
   // Reset field catatan & preview saat berganti batch (bukan tiap notes berubah).
@@ -100,13 +104,19 @@ export default function NotesImages({ batch, onChanged }) {
     }
   }
 
-  async function removeImage(imageId) {
+  async function removeImage() {
+    if (!pendingDelete) return
+    const imageId = pendingDelete.id
     setError('')
+    setDeleting(true)
     try {
       await del(`/batches/${batch.id}/images/${imageId}`)
       setImages((prev) => prev.filter((i) => i.id !== imageId))
     } catch (err) {
       setError(err.message)
+    } finally {
+      setDeleting(false)
+      setPendingDelete(null)
     }
   }
 
@@ -190,13 +200,14 @@ export default function NotesImages({ batch, onChanged }) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => removeImage(img.id)}
-                  className="absolute top-1 right-1 bg-ios-red/90 text-white rounded-full
-                    w-5 h-5 text-xs leading-none opacity-0 group-hover:opacity-100 transition
-                    focus:opacity-100"
-                  aria-label="Hapus gambar"
+                  onClick={() => setPendingDelete(img)}
+                  className="absolute top-1 right-1 inline-flex items-center justify-center
+                    bg-ios-red/90 text-white rounded-full w-6 h-6 shadow
+                    hover:bg-ios-red focus:outline-none focus:ring-2 focus:ring-ios-red/60"
+                  aria-label={`Hapus gambar ${i + 1}`}
+                  title="Hapus gambar"
                 >
-                  &times;
+                  <Trash2 size={12} aria-hidden="true" />
                 </button>
               </div>
             ))}
@@ -209,8 +220,24 @@ export default function NotesImages({ batch, onChanged }) {
           images={images}
           initialIndex={previewIndex}
           onClose={() => setPreviewIndex(null)}
+          onDelete={(img) => {
+            setPreviewIndex(null)
+            setPendingDelete(img)
+          }}
         />
       )}
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Hapus gambar"
+        message="Gambar dokumentasi ini akan dihapus permanen. Lanjutkan?"
+        confirmLabel="Hapus"
+        busy={deleting}
+        onConfirm={removeImage}
+        onCancel={() => {
+          if (!deleting) setPendingDelete(null)
+        }}
+      />
     </div>
   )
 }
