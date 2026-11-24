@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install web dependencies
+        run: npm ci --prefix web
+
+      - name: Install hidro-backend dependencies
+        run: npm ci --prefix hidro-backend
+
+      - name: Install iot-api dependencies
+        run: npm ci --prefix iot-api
+
+      - name: Check version synchronization
+        run: npm run version:check
+
+      - name: Test hidro backend
+        run: npm run test:hidro
+
+      - name: Test settings
+        run: npm run test:settings
+
+      - name: Build web
+        run: npm run build:web

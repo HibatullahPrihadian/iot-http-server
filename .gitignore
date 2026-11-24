@@ -32,3 +32,5 @@ hidro-data/
 
 # Tooling lokal (Kilo)
 .kilo/
+!.kilo/command/
+!.kilo/command/feature.md
