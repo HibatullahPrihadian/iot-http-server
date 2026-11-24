@@ -1,0 +1,12 @@
+# CI-only override. It keeps staging ephemeral and prevents tunnel services
+# from exposing the runner publicly.
+services:
+  cloudflared:
+    profiles: [tunnel]
+
+  cloudflared-web:
+    profiles: [tunnel]
+
+  web:
+    ports:
+      - "${FRONTEND_PORT:-5080}:80"

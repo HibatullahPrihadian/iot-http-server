@@ -1,0 +1,97 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  staging:
+    name: Deploy and smoke-test staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate application version
+        run: npm run version:check
+
+      - name: Start ephemeral staging stack
+        env:
+          DEVICE_TOKEN: ci-device-token
+          INFLUXDB_PASSWORD: ci-influx-password
+          INFLUXDB_TOKEN: ci-influx-token
+          FRONTEND_PORT: 5080
+        run: docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d --build influxdb iot-api hidro-backend web
+
+      - name: Wait for backend health
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:5080/api/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -f docker-compose.yml -f docker-compose.staging.yml ps
+          docker compose -f docker-compose.yml -f docker-compose.staging.yml logs --no-color hidro-backend web
+          exit 1
+
+      - name: Smoke-test application version
+        run: curl --fail --silent http://127.0.0.1:5080/api/version
+
+      - name: Stop staging stack
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.staging.yml down -v
+
+  production:
+    name: Deploy production
+    needs: staging
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy all versioned services
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SHA: ${{ github.sha }}
+        run: |
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd '$DEPLOY_PATH' && git fetch origin main && git checkout main && git reset --hard '$DEPLOY_SHA' && docker compose up -d --build iot-api hidro-backend web"
+
+      - name: Verify production health
+        env:
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+        run: |
+          curl --fail --silent --show-error "$PRODUCTION_URL/api/health"
+          curl --fail --silent --show-error "$PRODUCTION_URL/api/version"
