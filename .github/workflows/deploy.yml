@@ -65,34 +65,21 @@ jobs:
   production:
     name: Deploy production
     needs: staging
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, production]
     environment: production
     timeout-minutes: 20
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure SSH
+      - name: Deploy all versioned services on production runner
         env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-        run: |
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 644 ~/.ssh/known_hosts
-
-      - name: Deploy all versioned services
-        env:
-          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
           DEPLOY_SHA: ${{ github.sha }}
         run: |
-          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
-            "cd '$DEPLOY_PATH' && git fetch origin main && git checkout main && git reset --hard '$DEPLOY_SHA' && docker compose up -d --build iot-api hidro-backend web"
+          cd "$DEPLOY_PATH"
+          git fetch origin main
+          git checkout main
+          git reset --hard "$DEPLOY_SHA"
+          docker compose up -d --build iot-api hidro-backend web
 
       - name: Verify production health
         env:
