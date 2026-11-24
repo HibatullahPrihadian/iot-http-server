@@ -81,9 +81,9 @@ jobs:
 
       - name: Deploy all versioned services
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
           DEPLOY_SHA: ${{ github.sha }}
         run: |
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
@@ -91,7 +91,7 @@ jobs:
 
       - name: Verify production health
         env:
-          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          PRODUCTION_URL: ${{ vars.PRODUCTION_URL }}
         run: |
           curl --fail --silent --show-error "$PRODUCTION_URL/api/health"
           curl --fail --silent --show-error "$PRODUCTION_URL/api/version"
