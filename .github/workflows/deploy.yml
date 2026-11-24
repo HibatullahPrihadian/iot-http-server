@@ -55,6 +55,11 @@ jobs:
 
       - name: Stop staging stack
         if: always()
+        env:
+          DEVICE_TOKEN: ci-device-token
+          INFLUXDB_PASSWORD: ci-influx-password
+          INFLUXDB_TOKEN: ci-influx-token
+          FRONTEND_PORT: 5080
         run: docker compose -f docker-compose.yml -f docker-compose.staging.yml down -v
 
   production:
