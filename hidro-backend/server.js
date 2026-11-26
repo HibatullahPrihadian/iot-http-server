@@ -1298,6 +1298,75 @@ app.post('/api/batches/:id/transfer', (req, res) => {
   }
 });
 
+// POST /api/batches/:id/relocate -> pindahkan batch pembesaran ke pipa kosong.
+// Record yang sama dipertahankan agar readings, gambar, tanggal, dan HST tidak berubah.
+app.post('/api/batches/:id/relocate', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'id tidak valid' });
+
+    const batch = db.prepare('SELECT * FROM PlantBatch WHERE id = ?').get(id);
+    if (!batch) return res.status(404).json({ error: 'Batch tidak ditemukan' });
+    if (batch.archivedAt) {
+      return res.status(403).json({ error: 'Batch arsip tidak bisa dipindahkan' });
+    }
+    if (![1, 2].includes(batch.tableNumber)) {
+      return res.status(403).json({ error: 'Hanya tanaman di Meja 1-2 yang bisa dipindahkan' });
+    }
+
+    const toTable = Number(req.body?.toTable);
+    const toPipe = Number(req.body?.toPipe);
+    if (![1, 2].includes(toTable)) {
+      return res.status(400).json({ error: 'toTable harus 1 atau 2' });
+    }
+    if (!Number.isInteger(toPipe) || toPipe < 1 || toPipe > 6) {
+      return res.status(400).json({ error: 'toPipe harus 1-6' });
+    }
+    if (toTable === batch.tableNumber && toPipe === batch.pipeNumber) {
+      return res.status(400).json({ error: 'Pipa tujuan harus berbeda dari lokasi saat ini' });
+    }
+
+    const moved = db.transaction(() => {
+      const occupied = db
+        .prepare(
+          `SELECT 1 FROM PlantBatch
+           WHERE tableNumber = ? AND pipeNumber = ? AND archivedAt IS NULL AND id != ?`
+        )
+        .get(toTable, toPipe, id);
+      if (occupied) return false;
+      const result = db
+        .prepare(
+          `UPDATE PlantBatch SET tableNumber = ?, pipeNumber = ?
+           WHERE id = ? AND archivedAt IS NULL AND tableNumber IN (1, 2)`
+        )
+        .run(toTable, toPipe, id);
+      return result.changes === 1;
+    })();
+
+    if (!moved) {
+      const current = db.prepare('SELECT archivedAt FROM PlantBatch WHERE id = ?').get(id);
+      if (!current || current.archivedAt) {
+        return res.status(403).json({ error: 'Batch tidak lagi aktif untuk dipindahkan' });
+      }
+      return res.status(409).json({ error: `Meja ${toTable} Pipa ${toPipe} sudah terisi` });
+    }
+    res.json({
+      success: true,
+      id,
+      fromTable: batch.tableNumber,
+      fromPipe: batch.pipeNumber,
+      toTable,
+      toPipe,
+    });
+  } catch (err) {
+    if (err && typeof err.code === 'string' && err.code.startsWith('SQLITE_CONSTRAINT')) {
+      return res.status(409).json({ error: 'Pipa tujuan sudah terisi' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // PUT /api/batches/:id/notes -> set/hapus catatan.
 app.put('/api/batches/:id/notes', (req, res) => {
   try {

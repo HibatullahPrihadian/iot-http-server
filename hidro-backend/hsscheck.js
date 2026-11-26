@@ -150,7 +150,56 @@ async function waitReady() {
       clones.map((x) => ({ hss: x.hss, hst: x.hst }))
     );
 
-    console.log('\n== 6. Panen -> umur dibekukan ==');
+    console.log('\n== 6. Relokasi antar-pipa pembesaran ==');
+    const relocate = await api('POST', `/batches/${splitId}/relocate`, {
+      toTable: 1,
+      toPipe: 2,
+    });
+    check('relocate 200', relocate.status === 200, relocate.body);
+    check('ID batch tetap', relocate.body.id === splitId, relocate.body);
+    const occupiedTarget = await api('POST', `/batches/${splitId}/relocate`, {
+      toTable: 2,
+      toPipe: 2,
+    });
+    check('target terisi ditolak (409)', occupiedTarget.status === 409, occupiedTarget.body);
+    const sameTarget = await api('POST', `/batches/${splitId}/relocate`, {
+      toTable: 1,
+      toPipe: 2,
+    });
+    check('lokasi sama ditolak (400)', sameTarget.status === 400, sameTarget.body);
+    const invalidTarget = await api('POST', `/batches/${splitId}/relocate`, {
+      toTable: 3,
+      toPipe: 7,
+    });
+    check('meja/pipa di luar rentang ditolak (400)', invalidTarget.status === 400, invalidTarget.body);
+    const nursery = await api('POST', '/batches', {
+      tableNumber: 3,
+      pipeNumber: 3,
+      plantId: selada.id,
+      sowDate: daysAgo(2),
+    });
+    const nurseryRelocate = await api('POST', `/batches/${nursery.body.id}/relocate`, {
+      toTable: 1,
+      toPipe: 3,
+    });
+    check('batch pembibitan tidak bisa direlokasi (403)', nurseryRelocate.status === 403, nurseryRelocate.body);
+    list = (await api('GET', '/batches')).body;
+    const relocated = list.find((x) => x.id === splitId);
+    check('lokasi baru Meja 1 Pipa 2', relocated.tableNumber === 1 && relocated.pipeNumber === 2, relocated);
+    check('asal Meja 2 Pipa 1 kosong', !list.some((x) => x.tableNumber === 2 && x.pipeNumber === 1), list);
+    check(
+      'HSS/HST dan tanggal tetap',
+      relocated.hss === 12 && relocated.hst === 0 && relocated.transplantDate === iso(today),
+      relocated
+    );
+    check(
+      'estimasi panen tetap',
+      relocated.harvestDate === iso(new Date(Date.now() + selada.growDays * 86400000)),
+      relocated.harvestDate
+    );
+    await api('POST', `/batches/${splitId}/relocate`, { toTable: 2, toPipe: 1 });
+
+    console.log('\n== 7. Panen -> umur dibekukan ==');
     const harvest = await api('POST', `/batches/${id}/harvest`, { harvestWeightGram: 400 });
     check('harvest 200', harvest.status === 200, harvest.body);
     check('HSS saat panen = 10', harvest.body.hss === 10, harvest.body);
@@ -162,7 +211,7 @@ async function waitReady() {
     check('riwayat punya HST', h.hst === 3, h);
     check('riwayat punya tanggal pindah', h.transplantDate === daysAgo(3), h.transplantDate);
 
-    console.log('\n== 7. Statistik HSS/HST ==');
+    console.log('\n== 8. Statistik HSS/HST ==');
     const stats = (await api('GET', '/stats/summary')).body;
     check('ada hssHstRealisasi', Array.isArray(stats.hssHstRealisasi), stats);
     const seladaStat = stats.hssHstRealisasi.find((s) => s.plant === 'Selada');
@@ -171,7 +220,13 @@ async function waitReady() {
     check('realisasi HSS = 10', seladaStat.realisasiHss === 10, seladaStat);
     check('realisasi HST = 3', seladaStat.realisasiHst === 3, seladaStat);
 
-    console.log('\n== 8. Fase resep mengikuti pindah aktual ==');
+    const archivedRelocate = await api('POST', `/batches/${id}/relocate`, {
+      toTable: 1,
+      toPipe: 3,
+    });
+    check('batch arsip tidak bisa direlokasi (403)', archivedRelocate.status === 403, archivedRelocate.body);
+
+    console.log('\n== 9. Fase resep mengikuti pindah aktual ==');
     const recipe = (await api('GET', `/batches/${id}/recipe`)).body;
     check('phase Pembesaran setelah pindah', recipe.phase === 'Pembesaran', recipe.phase);
   } finally {

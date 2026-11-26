@@ -32,6 +32,8 @@ export default function PlantModal({
   const [transferMode, setTransferMode] = useState(false)
   const [transferDate, setTransferDate] = useState(todayInput())
   const [toPipes, setToPipes] = useState([]) // ['table:pipe', ...]
+  const [relocateMode, setRelocateMode] = useState(false)
+  const [relocateTarget, setRelocateTarget] = useState('')
 
   const isNursery = modal.tableNumber === 3
 
@@ -45,6 +47,8 @@ export default function PlantModal({
     setTransferMode(false)
     setTransferDate(todayInput())
     setToPipes([])
+    setRelocateMode(false)
+    setRelocateTarget('')
     if (batch) {
       setPlantId(String(batch.plantId))
       setSowDate(batch.sowDate)
@@ -62,12 +66,17 @@ export default function PlantModal({
   const emptyPipes = (tableNumber) => {
     const filled = new Set(
       (batches || [])
-        .filter((b) => b.tableNumber === tableNumber)
+        .filter((b) => b.tableNumber === tableNumber && b.id !== batch?.id)
         .map((b) => b.pipeNumber)
     )
     return [1, 2, 3, 4, 5, 6].filter((p) => !filled.has(p))
   }
   const emptyByTable = { 1: emptyPipes(1), 2: emptyPipes(2) }
+  const emptyRelocationTargets = [1, 2].flatMap((table) =>
+    emptyByTable[table]
+      .filter((pipe) => table !== batch?.tableNumber || pipe !== batch?.pipeNumber)
+      .map((pipe) => ({ table, pipe }))
+  )
 
   async function handlePlant(e) {
     e.preventDefault()
@@ -154,6 +163,22 @@ export default function PlantModal({
         }),
         transplantDate: transferDate || undefined,
       })
+      onSaved()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleRelocate(e) {
+    e.preventDefault()
+    if (!relocateTarget) return
+    const [toTable, toPipe] = relocateTarget.split(':').map(Number)
+    setError('')
+    setBusy(true)
+    try {
+      await post(`/batches/${batch.id}/relocate`, { toTable, toPipe })
       onSaved()
     } catch (err) {
       setError(err.message)
@@ -326,6 +351,54 @@ export default function PlantModal({
                 </button>
               </div>
             </form>
+          ) : relocateMode && !isNursery ? (
+            <form onSubmit={handleRelocate} className="space-y-4">
+              <p className="text-sm text-text-dim">
+                Pindahkan <strong className="text-text-hi">{batch.plantName}</strong> dari
+                {' '}Meja {modal.tableNumber} Pipa {modal.pipeNumber} ke satu pipa kosong.
+              </p>
+              <p className="text-xs text-text-low">
+                Tanggal tanam, tanggal pindah, HST, foto, dan catatan tetap sama.
+              </p>
+              {emptyRelocationTargets.length === 0 ? (
+                <p className="text-sm text-ios-orange">Tidak ada pipa kosong untuk tujuan pindah.</p>
+              ) : (
+                <label className="block">
+                  <span className="text-sm font-medium text-mid">Pipa tujuan</span>
+                  <select
+                    required
+                    value={relocateTarget}
+                    onChange={(e) => setRelocateTarget(e.target.value)}
+                    className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2
+                      text-text-body focus:outline-none focus:border-ios-blue focus:ring-2 focus:ring-ios-blue/30"
+                  >
+                    <option value="" className="bg-neutral-900">Pilih pipa kosong</option>
+                    {emptyRelocationTargets.map(({ table, pipe }) => (
+                      <option key={`${table}:${pipe}`} value={`${table}:${pipe}`} className="bg-neutral-900">
+                        Meja {table} · Pipa {pipe}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRelocateMode(false)}
+                  disabled={busy}
+                  className="btn-ios flex-1 border border-white/10 text-text-dim py-2.5 hover:bg-white/5"
+                >
+                  Kembali
+                </button>
+                <button
+                  type="submit"
+                  disabled={busy || !relocateTarget}
+                  className="btn-ios flex-1 bg-ios-blue hover:shadow-glow-blue disabled:opacity-60 text-white py-2.5"
+                >
+                  {busy ? 'Memindah...' : 'Pindahkan'}
+                </button>
+              </div>
+            </form>
           ) : (
             <div className="space-y-3">
               <dl className="text-sm text-text-dim space-y-2">
@@ -360,6 +433,18 @@ export default function PlantModal({
                 </button>
               ) : (
                 <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRelocateTarget('')
+                      setRelocateMode(true)
+                    }}
+                    disabled={busy}
+                    className="btn-ios w-full border border-ios-blue/50 text-ios-blue hover:bg-ios-blue/10
+                      disabled:opacity-60 py-2.5"
+                  >
+                    Pindahkan ke Pipa Lain
+                  </button>
                   <div className="border-t border-white/10 pt-3">
                     <label className="block text-sm font-medium text-mid mb-1">
                       Berat panen (gram, opsional)
