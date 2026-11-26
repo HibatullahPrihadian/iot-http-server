@@ -9,7 +9,7 @@ Work through these steps:
 1. Read the repository instructions in `AGENTS.md` and inspect the relevant application code before editing. Identify the affected service(s), API/UI contracts, and existing tests.
 2. If the request is ambiguous or has materially different behavior choices, ask one concise clarification before changing code. Otherwise state a short implementation plan and proceed.
 3. Keep the change focused. Preserve the existing architecture and conventions. Database migrations must be additive and idempotent. Do not read, print, or modify secrets, `.env` files, `note.txt`, or persistent production data.
-4. Do not change the application version for an ordinary feature PR. If the user explicitly requests a release/version bump, use `npm run version:bump -- patch|minor|major`; never edit `VERSION`, package versions, or lockfiles manually.
+4. Every new feature must increment the application version before committing: use `npm run version:bump -- minor` (for example, `2.7.0` -> `2.8.0`). Use `patch` for bug fixes and `major` only for breaking changes. Never edit `VERSION`, package versions, or lockfiles manually; the bump script synchronizes them. Run `npm run version:check` afterward. Include the resulting `v<version>` in every commit message as required by `AGENTS.md`.
 5. Add or update tests for changed behavior where practical. Run the relevant checks, and for a broad feature run:
    - `npm run version:check`
    - `npm run test:hidro`
